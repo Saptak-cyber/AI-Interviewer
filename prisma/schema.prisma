@@ -1,0 +1,180 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Auth.js (NextAuth v4) required models ────────────────────────────────────
+
+model User {
+  id              String           @id @default(cuid())
+  name            String?
+  email           String?          @unique
+  emailVerified   DateTime?
+  image           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  experienceLevel ExperienceLevel?
+
+  accounts          Account[]
+  sessions          Session[]
+  interviewSessions InterviewSession[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  FAANG
+}
+
+enum InterviewTopic {
+  DSA
+  SYSTEM_DESIGN
+  BACKEND
+  BEHAVIORAL
+  CUSTOM
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+  FAANG
+}
+
+enum InterviewMode {
+  TEXT
+  CODING
+  VOICE_TEXT
+  VOICE_CODING
+}
+
+enum DurationType {
+  RAPID
+  STANDARD
+  FULL
+}
+
+enum TurnRole {
+  AI
+  USER
+}
+
+enum TurnKind {
+  QUESTION
+  ANSWER
+  FOLLOWUP
+  SYSTEM
+}
+
+enum QuestionType {
+  CODING
+  BEHAVIORAL
+  SYSTEM_DESIGN
+  GENERAL
+}
+
+// ─── AI Interviewer models ────────────────────────────────────────────────────
+
+model InterviewSession {
+  id              String          @id @default(cuid())
+  userId          String
+  topic           InterviewTopic
+  customTopic     String?
+  difficulty      Difficulty
+  experienceLevel ExperienceLevel
+  mode            InterviewMode
+  durationType    DurationType
+  startedAt       DateTime        @default(now())
+  endedAt         DateTime?
+  overallScores   Json?
+  isComplete      Boolean         @default(false)
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  turns       InterviewTurn[]
+  evaluations Evaluation[]
+}
+
+model InterviewTurn {
+  id         String   @id @default(cuid())
+  sessionId  String
+  role       TurnRole
+  kind       TurnKind
+  content    String   @db.Text
+  audioUrl   String?
+  questionId String?
+  createdAt  DateTime @default(now())
+
+  session  InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question Question?        @relation(fields: [questionId], references: [id])
+}
+
+model Question {
+  id                      String       @id @default(cuid())
+  text                    String       @db.Text
+  topic                   InterviewTopic
+  difficulty              Difficulty
+  type                    QuestionType
+  companyTag              String?
+  expectedSolutionSummary String?      @db.Text
+  followups               Json?
+  createdAt               DateTime     @default(now())
+
+  turns       InterviewTurn[]
+  evaluations Evaluation[]
+}
+
+model Evaluation {
+  id         String   @id @default(cuid())
+  sessionId  String
+  questionId String?
+  scores     Json
+  strengths  String   @db.Text
+  weaknesses String   @db.Text
+  summary    String   @db.Text
+  createdAt  DateTime @default(now())
+
+  session  InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question Question?        @relation(fields: [questionId], references: [id])
+}
