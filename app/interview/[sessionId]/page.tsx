@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useParams } from "next/navigation";
 import ChatInterface from "@/components/interview/ChatInterface";
 import CodeEditor from "@/components/interview/CodeEditor";
 import FeedbackPanel from "@/components/interview/FeedbackPanel";
@@ -54,9 +54,9 @@ function Timer({ startedAt }: { startedAt: Date }) {
   );
 }
 
-export default function InterviewPage({ params }: { params: Promise<{ sessionId: string }> }) {
+export default function InterviewPage() {
   const router = useRouter();
-  const { sessionId } = use(params);
+  const { sessionId } = useParams<{ sessionId: string }>();
 
   const [session, setSession] = useState<SessionData | null>(null);
   const [firstMessage, setFirstMessage] = useState<string>("");
@@ -69,9 +69,14 @@ export default function InterviewPage({ params }: { params: Promise<{ sessionId:
   const hasCode = session?.mode === "CODING" || session?.mode === "VOICE_CODING";
 
   useEffect(() => {
+    console.log('[InterviewPage] useEffect triggered, sessionId:', sessionId);
     async function loadSession() {
       try {
-        const res = await fetch(`/api/interview/${sessionId}`);
+        console.log('[InterviewPage] Fetching session data...');
+        const res = await fetch(`/api/interview/${sessionId}`, {
+          cache: 'no-store',
+          next: { revalidate: 0 }
+        });
         const data = await res.json();
 
         if (!res.ok) throw new Error(data.error ?? "Session not found");

@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  experimental: {
+    staleTimes: {
+      dynamic: 0,
+    },
+  },
   turbopack: {
-    // Point to the monorepo root to suppress the multiple lockfiles warning
     root: __dirname,
   },
   images: {

@@ -37,8 +37,8 @@ app.prepare().then(() => {
         handleVoiceConnection(ws, sessionId);
       });
     } else {
-      // Not a WS endpoint we handle — destroy the socket to avoid hanging
-      socket.destroy();
+      // Let Next.js handle other WebSocket connections (like HMR)
+      // by not destroying the socket
     }
   });
 
