@@ -18,6 +18,7 @@ export class AudioStreamPlayer {
   private nextStartTime = 0;
   private activeSources: AudioBufferSourceNode[] = [];
   private generation = 0;
+  private pendingDecodes = 0; // chunks enqueued but not yet scheduled
   onPlaybackEnd: (() => void) | null = null;
 
   // Lazily create AudioContext on first use (requires user gesture on some browsers)
@@ -38,10 +39,14 @@ export class AudioStreamPlayer {
    */
   enqueue(mp3Buffer: ArrayBuffer): void {
     const gen = this.generation;
+    this.pendingDecodes++;
 
     this.chain = this.chain.then(async () => {
       // If stop() was called since this enqueue, bail out
-      if (this.generation !== gen) return;
+      if (this.generation !== gen) {
+        this.pendingDecodes--;
+        return;
+      }
 
       const ctx = this.getCtx();
       let audioBuffer: AudioBuffer;
@@ -51,10 +56,14 @@ export class AudioStreamPlayer {
         audioBuffer = await ctx.decodeAudioData(mp3Buffer.slice(0));
       } catch (err) {
         console.warn("[AudioStreamPlayer] Failed to decode MP3 segment:", err);
+        this.pendingDecodes--;
         return;
       }
 
-      if (this.generation !== gen) return;
+      if (this.generation !== gen) {
+        this.pendingDecodes--;
+        return;
+      }
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
@@ -65,12 +74,13 @@ export class AudioStreamPlayer {
       source.start(startTime);
       this.nextStartTime = startTime + audioBuffer.duration;
       this.activeSources.push(source);
+      this.pendingDecodes--; // now scheduled — no longer pending
 
       source.onended = () => {
         // Remove from active list
         this.activeSources = this.activeSources.filter((s) => s !== source);
-        // If nothing else is queued or playing, fire the end callback
-        if (this.activeSources.length === 0 && this.generation === gen) {
+        // Only fire end callback when nothing is playing AND nothing still decoding
+        if (this.activeSources.length === 0 && this.pendingDecodes === 0 && this.generation === gen) {
           this.onPlaybackEnd?.();
         }
       };
@@ -83,6 +93,7 @@ export class AudioStreamPlayer {
    */
   stop(): void {
     this.generation++; // invalidates all pending enqueue callbacks
+    this.pendingDecodes = 0;
 
     for (const src of this.activeSources) {
       try {
@@ -98,7 +109,7 @@ export class AudioStreamPlayer {
 
   /** Check if any audio is currently playing or scheduled. */
   get isPlaying(): boolean {
-    return this.activeSources.length > 0;
+    return this.activeSources.length > 0 || this.pendingDecodes > 0;
   }
 
   /** Fully tear down (call when the component unmounts). */

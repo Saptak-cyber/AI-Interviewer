@@ -1,0 +1,6 @@
+{
+  "watch": ["server.ts", "lib"],
+  "ext": "ts",
+  "ignore": [".next", "node_modules", "app", "components", "prisma"],
+  "exec": "tsx --tsconfig tsconfig.server.json server.ts"
+}

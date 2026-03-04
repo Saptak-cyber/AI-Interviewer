@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "tsx watch server.ts",
+    "dev": "nodemon",
     "dev:next": "next dev",
     "build": "next build",
     "start": "NODE_ENV=production tsx server.ts",
@@ -40,6 +40,7 @@
     "dotenv": "^17.3.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "nodemon": "^3.1.14",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"

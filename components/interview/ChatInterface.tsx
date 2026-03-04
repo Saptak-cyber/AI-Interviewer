@@ -153,7 +153,13 @@ export default function ChatInterface({
 
   // HTTP mode TTS audio ref (legacy, non-WS voice modes)
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const initialSpokenRef = useRef(false);
+  // Persist "initial message spoken" across page refreshes for this session
+  // so a tsx-watch restart doesn't re-fire the TTS every time.
+  const initialSpokenRef = useRef(
+    typeof sessionStorage !== "undefined"
+      ? sessionStorage.getItem(`tts-spoken-${sessionId}`) === "1"
+      : false
+  );
 
   // WS + AudioStreamPlayer refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -311,6 +317,12 @@ export default function ChatInterface({
             ]);
           }
           setIsLoading(false);
+          // Safety net: if audio player never fires onPlaybackEnd (e.g. suspended
+          // AudioContext), reset the speaking indicator here.
+          if (!audioPlayerRef.current?.isPlaying) {
+            setIsSpeaking(false);
+            setSpeakingMsgId(null);
+          }
           if (isNowComplete) {
             setIsComplete(true);
             onCompleteRef.current();
@@ -417,6 +429,7 @@ export default function ChatInterface({
     // starts — we only use the legacy HTTP TTS for non-WS contexts.
     if (hasVoice && !muted && initialMessage && !wsInstance) {
       initialSpokenRef.current = true;
+      sessionStorage.setItem(`tts-spoken-${sessionId}`, "1");
       void playTts(initialMessage, "initial");
     }
   }, [hasVoice, muted, initialMessage, playTts, wsInstance]);
@@ -455,9 +468,6 @@ export default function ChatInterface({
       // Use a ref-based guard so concurrent/stale-closure double-calls are blocked
       // regardless of whether `isLoading` state has flushed yet.
       if (!text.trim() || isSendingRef.current || isComplete) return;
-      // In voice mode the WS pipeline handles everything — never use HTTP when
-      // the socket is open, or we'll get duplicate messages.
-      if (wsInstance) return;
       isSendingRef.current = true;
 
       const userMsg: ChatMessage = {
@@ -510,8 +520,7 @@ export default function ChatInterface({
     },
     // onComplete is accessed via onCompleteRef — no longer a dep.
     // isLoading removed: the ref guard replaces it.
-    // wsInstance included so the guard sees the live socket state.
-    [sessionId, isComplete, hasVoice, playTts, wsInstance]
+    [sessionId, isComplete, hasVoice, playTts]
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
