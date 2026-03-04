@@ -6,12 +6,15 @@ import Button from "@/components/ui/Button";
 import VoiceRecorder from "./VoiceRecorder";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, InterviewMode } from "@/types";
+import { AudioStreamPlayer } from "@/lib/audio-player";
 
 interface ChatInterfaceProps {
   sessionId: string;
   mode: InterviewMode;
   initialMessage: string;
   onComplete: () => void;
+  /** Full prior history — used to restore chat after a page refresh. */
+  initialHistory?: ChatMessage[];
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -116,16 +119,21 @@ export default function ChatInterface({
   mode,
   initialMessage,
   onComplete,
+  initialHistory,
 }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "initial",
-      role: "ai",
-      content: initialMessage,
-      kind: "QUESTION",
-      createdAt: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    initialHistory && initialHistory.length > 0
+      ? initialHistory
+      : [
+          {
+            id: "initial",
+            role: "ai",
+            content: initialMessage,
+            kind: "QUESTION",
+            createdAt: new Date(),
+          },
+        ]
+  );
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
@@ -133,17 +141,177 @@ export default function ChatInterface({
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
 
+  // Streaming AI bubble: accumulates tokens before the turn is complete
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // HTTP mode TTS audio ref (legacy, non-WS voice modes)
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const initialSpokenRef = useRef(false);
 
+  // WS + AudioStreamPlayer refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const audioPlayerRef = useRef<AudioStreamPlayer | null>(null);
+
+  // Stable refs so the WS effect doesn't depend on mutable values
+  const mutedRef = useRef(muted);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+
   const hasVoice = mode === "VOICE_TEXT" || mode === "VOICE_CODING";
 
+  // ── AudioStreamPlayer lifecycle ─────────────────────────────────────────────
+  useEffect(() => {
+    audioPlayerRef.current = new AudioStreamPlayer();
+    audioPlayerRef.current.onPlaybackEnd = () => {
+      setIsSpeaking(false);
+      setSpeakingMsgId(null);
+    };
+    return () => {
+      audioPlayerRef.current?.destroy();
+      audioPlayerRef.current = null;
+    };
+  }, []);
+
+  // ── WebSocket lifecycle (voice modes only) ──────────────────────────────────
+  useEffect(() => {
+    if (!hasVoice) return;
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${proto}//${window.location.host}/api/voice/ws?sessionId=${sessionId}`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onmessage = (event: MessageEvent<string>) => {
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(event.data) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+
+      switch (msg.type) {
+        case "transcript": {
+          // User's speech has been transcribed — show it as a user bubble
+          const text = msg.text as string;
+          if (!text?.trim()) break;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `user-ws-${Date.now()}`,
+              role: "user",
+              content: text,
+              kind: "ANSWER",
+              createdAt: new Date(),
+            },
+          ]);
+          // Start the streaming AI placeholder
+          setStreamingContent("");
+          setIsLoading(true);
+          break;
+        }
+
+        case "ai_text_chunk": {
+          // Accumulate LLM tokens into the partial bubble
+          const token = msg.text as string;
+          setStreamingContent((prev) => (prev ?? "") + token);
+          break;
+        }
+
+        case "audio_chunk": {
+          if (mutedRef.current) break;
+          const base64 = msg.data as string;
+          const msgId = `ai-ws-speaking`;
+          setSpeakingMsgId(msgId);
+          setIsSpeaking(true);
+          // Decode base64 → ArrayBuffer → enqueue in AudioStreamPlayer
+          try {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i);
+            }
+            audioPlayerRef.current?.enqueue(bytes.buffer);
+          } catch (err) {
+            console.warn("[ChatInterface] Failed to decode audio chunk:", err);
+          }
+          break;
+        }
+
+        case "response_complete": {
+          const isNowComplete = msg.isComplete as boolean;
+          // Move streaming content into permanent message
+          setStreamingContent((content) => {
+            if (content !== null) {
+              const msgId = `ai-ws-${Date.now()}`;
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: msgId,
+                  role: "ai",
+                  content: content,
+                  kind: isNowComplete ? "SYSTEM" : "FOLLOWUP",
+                  createdAt: new Date(),
+                },
+              ]);
+            }
+            return null;
+          });
+          setIsLoading(false);
+          if (isNowComplete) {
+            setIsComplete(true);
+            onCompleteRef.current();
+          }
+          break;
+        }
+
+        case "error": {
+          const message = msg.message as string;
+          setStreamingContent(null);
+          setIsLoading(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `err-ws-${Date.now()}`,
+              role: "ai",
+              content: `Error: ${message}`,
+              kind: "SYSTEM",
+              createdAt: new Date(),
+            },
+          ]);
+          break;
+        }
+      }
+    };
+
+    ws.onerror = () => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-ws-conn-${Date.now()}`,
+          role: "ai",
+          content: "Voice connection error. Try refreshing the page.",
+          kind: "SYSTEM",
+          createdAt: new Date(),
+        },
+      ]);
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [sessionId, hasVoice]);
+
+  // ── Scroll to bottom ────────────────────────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading, isSpeaking]);
+  }, [messages, isLoading, isSpeaking, streamingContent]);
 
+  // ── Textarea auto-resize ────────────────────────────────────────────────────
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -151,86 +319,84 @@ export default function ChatInterface({
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
 
-  // ── TTS helper ──────────────────────────────────────────────────────────────
-
+  // ── Legacy HTTP TTS (non-WS voice fallback) ─────────────────────────────────
   const playTts = useCallback(
     async (text: string, msgId: string) => {
       if (muted) return;
-
-      // Stop any currently playing audio
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current = null;
       }
-
       setIsSpeaking(true);
       setSpeakingMsgId(msgId);
-
       try {
         const res = await fetch("/api/voice/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
         });
-
-        if (!res.ok) {
-          // Fail silently — the text is already shown in the chat
-          console.warn("TTS failed:", res.status);
-          return;
-        }
-
+        if (!res.ok) { console.warn("TTS failed:", res.status); return; }
         const arrayBuffer = await res.arrayBuffer();
-        // ElevenLabs returns MP3 when Accept: audio/mpeg
         const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
         const url = URL.createObjectURL(blob);
-
         const audio = new Audio(url);
         currentAudioRef.current = audio;
-
         audio.onended = () => {
           URL.revokeObjectURL(url);
-          setIsSpeaking(false);
-          setSpeakingMsgId(null);
-          currentAudioRef.current = null;
+          setIsSpeaking(false); setSpeakingMsgId(null); currentAudioRef.current = null;
         };
-
         audio.onerror = () => {
           URL.revokeObjectURL(url);
-          setIsSpeaking(false);
-          setSpeakingMsgId(null);
-          currentAudioRef.current = null;
+          setIsSpeaking(false); setSpeakingMsgId(null); currentAudioRef.current = null;
         };
-
         await audio.play();
       } catch {
-        setIsSpeaking(false);
-        setSpeakingMsgId(null);
+        setIsSpeaking(false); setSpeakingMsgId(null);
       }
     },
     [muted]
   );
 
-  // Speak the initial AI message once in voice mode
+  // Speak initialMessage once in legacy voice modes (no WS)
   useEffect(() => {
     if (initialSpokenRef.current) return;
-    if (hasVoice && !muted && initialMessage) {
+    // For WS voice modes the server speaks the first message after the session
+    // starts — we only use the legacy HTTP TTS for non-WS contexts.
+    if (hasVoice && !muted && initialMessage && !wsRef.current) {
       initialSpokenRef.current = true;
       void playTts(initialMessage, "initial");
     }
   }, [hasVoice, muted, initialMessage, playTts]);
 
   function handleMuteToggle() {
-    if (!muted && currentAudioRef.current) {
-      currentAudioRef.current.pause();
+    if (!muted) {
+      // Stop any in-progress audio
+      currentAudioRef.current?.pause();
       currentAudioRef.current = null;
+      audioPlayerRef.current?.stop();
       setIsSpeaking(false);
       setSpeakingMsgId(null);
     }
     setMuted((m) => !m);
   }
 
-  // ── Send message ────────────────────────────────────────────────────────────
+  // ── Barge-in: user starts speaking while AI is playing ──────────────────────
+  function handleUserSpeechStart() {
+    if (isSpeaking) {
+      // Stop audio playback immediately
+      audioPlayerRef.current?.stop();
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+      setIsSpeaking(false);
+      setSpeakingMsgId(null);
+      // Tell server to cancel the active LLM / TTS stream
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "interrupt" }));
+      }
+    }
+  }
 
+  // ── HTTP send message (TEXT / CODING modes) ─────────────────────────────────
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim() || isLoading || isComplete) return;
@@ -242,7 +408,6 @@ export default function ChatInterface({
         kind: "ANSWER",
         createdAt: new Date(),
       };
-
       setMessages((prev) => [...prev, userMsg]);
       setInput("");
       setIsLoading(true);
@@ -253,12 +418,8 @@ export default function ChatInterface({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId, message: text.trim() }),
         });
-
         const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error ?? "Something went wrong");
-        }
+        if (!res.ok) throw new Error(data.error ?? "Something went wrong");
 
         const msgId = `ai-${Date.now()}`;
         const aiMsg: ChatMessage = {
@@ -268,30 +429,21 @@ export default function ChatInterface({
           kind: data.isComplete ? "SYSTEM" : "FOLLOWUP",
           createdAt: new Date(),
         };
-
         setMessages((prev) => [...prev, aiMsg]);
 
-        // Speak the interviewer's reply in voice modes
-        if (hasVoice) {
-          void playTts(data.reply, msgId);
-        }
-
-        if (data.isComplete) {
-          setIsComplete(true);
-          onComplete();
-        }
+        if (hasVoice) void playTts(data.reply, msgId);
+        if (data.isComplete) { setIsComplete(true); onComplete(); }
       } catch (err) {
-        const errMsg: ChatMessage = {
-          id: `err-${Date.now()}`,
-          role: "ai",
-          content:
-            err instanceof Error
-              ? `Error: ${err.message}`
-              : "Something went wrong. Please try again.",
-          kind: "SYSTEM",
-          createdAt: new Date(),
-        };
-        setMessages((prev) => [...prev, errMsg]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `err-${Date.now()}`,
+            role: "ai",
+            content: err instanceof Error ? `Error: ${err.message}` : "Something went wrong.",
+            kind: "SYSTEM",
+            createdAt: new Date(),
+          },
+        ]);
       } finally {
         setIsLoading(false);
       }
@@ -300,20 +452,14 @@ export default function ChatInterface({
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage(input);
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); }
   }
 
   function handleVoiceTranscript(text: string) {
-    // In pure voice mode: auto-send. In VOICE_TEXT: append to textarea.
     if (mode === "VOICE_CODING") {
-      // For coding mode, append to textarea so user can review before sending
       setInput((prev) => (prev ? `${prev} ${text}` : text));
       textareaRef.current?.focus();
     } else {
-      // VOICE_TEXT: auto-send the transcript immediately
       void sendMessage(text);
     }
   }
@@ -331,14 +477,28 @@ export default function ChatInterface({
             isSpeaking={speakingMsgId === msg.id}
             muted={muted}
             onReplay={
-              hasVoice && msg.role === "ai"
+              hasVoice && msg.role === "ai" && !wsRef.current
                 ? () => void playTts(msg.content, msg.id)
                 : undefined
             }
           />
         ))}
-        {isLoading && <TypingIndicator />}
-        {isSpeaking && !isLoading && <SpeakingIndicator />}
+
+        {/* Streaming AI bubble (WS mode) */}
+        {streamingContent !== null && (
+          <div className="flex items-end gap-3 justify-start">
+            <div className="w-8 h-8 rounded-full bg-indigo-600/50 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-300 animate-pulse">
+              AI
+            </div>
+            <div className="px-4 py-3 rounded-2xl rounded-bl-sm bg-zinc-800 border border-indigo-500/30 text-sm text-zinc-100 leading-relaxed whitespace-pre-wrap max-w-[75%]">
+              {streamingContent}
+              <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-400 animate-pulse rounded-sm align-text-bottom" />
+            </div>
+          </div>
+        )}
+
+        {isLoading && streamingContent === null && <TypingIndicator />}
+        {isSpeaking && !isLoading && streamingContent === null && <SpeakingIndicator />}
         <div ref={messagesEndRef} />
       </div>
 
@@ -346,7 +506,6 @@ export default function ChatInterface({
       {!isComplete && (
         <div className="border-t border-zinc-800 px-4 py-3 bg-zinc-950/80 backdrop-blur-sm">
           <div className="flex items-end gap-2">
-            {/* Mute toggle (voice modes only) */}
             {hasVoice && (
               <Button
                 variant="ghost"
@@ -363,15 +522,15 @@ export default function ChatInterface({
               </Button>
             )}
 
-            {/* Voice recorder */}
             {hasVoice && (
               <VoiceRecorder
                 onTranscript={handleVoiceTranscript}
-                disabled={isLoading || isSpeaking}
+                onSpeechStart={handleUserSpeechStart}
+                disabled={isLoading && !isSpeaking}
+                ws={wsRef.current}
               />
             )}
 
-            {/* Text input */}
             <div className="flex-1 relative">
               <textarea
                 ref={textareaRef}
@@ -396,7 +555,7 @@ export default function ChatInterface({
               disabled={isLoading || !input.trim()}
               className="h-12 w-12 p-0 flex-shrink-0"
             >
-              {isLoading ? (
+              {isLoading && streamingContent === null ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Send className="w-4 h-4" />

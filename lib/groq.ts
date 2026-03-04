@@ -148,6 +148,39 @@ export async function callInterviewerLLM(
   return { reply, isComplete };
 }
 
+/**
+ * Streaming variant of callInterviewerLLM.
+ * Yields individual text tokens as they arrive from Groq.
+ * Pass an AbortSignal to cancel mid-stream (e.g. on user barge-in).
+ */
+export async function* callInterviewerLLMStream(
+  state: RedisSessionState,
+  userMessage: string,
+  signal?: AbortSignal
+): AsyncGenerator<string> {
+  const systemPrompt = buildInterviewerSystemPrompt(state);
+
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: systemPrompt },
+    ...state.conversationHistory,
+    { role: "user", content: userMessage },
+  ];
+
+  const stream = await groq.chat.completions.create({
+    model: MODEL,
+    messages,
+    temperature: 0.7,
+    max_tokens: 1024,
+    stream: true,
+  });
+
+  for await (const chunk of stream) {
+    if (signal?.aborted) break;
+    const token = chunk.choices[0]?.delta?.content ?? "";
+    if (token) yield token;
+  }
+}
+
 export async function callEvaluatorLLM(
   state: RedisSessionState
 ): Promise<EvaluationResult> {

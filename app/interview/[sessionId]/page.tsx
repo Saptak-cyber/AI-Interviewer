@@ -60,6 +60,7 @@ export default function InterviewPage({ params }: { params: Promise<{ sessionId:
 
   const [session, setSession] = useState<SessionData | null>(null);
   const [firstMessage, setFirstMessage] = useState<string>("");
+  const [history, setHistory] = useState<import("@/types").ChatMessage[]>([]);
   const [isComplete, setIsComplete] = useState(false);
   const [startedAt] = useState(new Date());
   const [isLoading, setIsLoading] = useState(true);
@@ -78,11 +79,21 @@ export default function InterviewPage({ params }: { params: Promise<{ sessionId:
         const sess = data.session as SessionData;
         setSession(sess);
 
-        // The first AI turn is the first message in turns
+        // The first AI turn is the opening question
         const firstAiTurn = sess.turns.find((t) => t.role === "AI");
         if (firstAiTurn) {
           setFirstMessage(firstAiTurn.content);
         }
+
+        // Build the full history so ChatInterface can restore on refresh
+        const history = sess.turns.map((t) => ({
+          id: t.id,
+          role: t.role === "AI" ? ("ai" as const) : ("user" as const),
+          content: t.content,
+          kind: t.kind as import("@/types").TurnKind,
+          createdAt: new Date(t.createdAt),
+        }));
+        setHistory(history);
 
         if (sess.isComplete) {
           setIsComplete(true);
@@ -170,6 +181,7 @@ export default function InterviewPage({ params }: { params: Promise<{ sessionId:
                 sessionId={sessionId}
                 mode={session.mode as "TEXT" | "CODING" | "VOICE_TEXT" | "VOICE_CODING"}
                 initialMessage={firstMessage}
+                initialHistory={history}
                 onComplete={() => setIsComplete(true)}
               />
             ) : (
