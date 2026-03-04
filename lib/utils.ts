@@ -14,6 +14,15 @@ export function formatDuration(durationType: string): string {
   return map[durationType] ?? durationType;
 }
 
+export function getDurationSeconds(durationType: string): number {
+  const map: Record<string, number> = {
+    RAPID: 10 * 60,      // 10 minutes
+    STANDARD: 30 * 60,   // 30 minutes
+    FULL: 60 * 60,       // 60 minutes
+  };
+  return map[durationType] ?? 30 * 60; // default to 30 minutes
+}
+
 export function formatTopic(topic: string, customTopic?: string | null): string {
   if (topic === "CUSTOM" && customTopic) return customTopic;
   const map: Record<string, string> = {

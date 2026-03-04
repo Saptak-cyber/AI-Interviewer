@@ -432,7 +432,7 @@ export default function ChatInterface({
       sessionStorage.setItem(`tts-spoken-${sessionId}`, "1");
       void playTts(initialMessage, "initial");
     }
-  }, [hasVoice, muted, initialMessage, playTts, wsInstance]);
+  }, [hasVoice, muted, initialMessage, playTts, wsInstance, sessionId]);
 
   function handleMuteToggle() {
     if (!muted) {

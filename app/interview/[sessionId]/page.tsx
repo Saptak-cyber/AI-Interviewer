@@ -5,7 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import ChatInterface from "@/components/interview/ChatInterface";
 import CodeEditor from "@/components/interview/CodeEditor";
 import FeedbackPanel from "@/components/interview/FeedbackPanel";
-import { formatTopic, formatDifficulty, formatDuration } from "@/lib/utils";
+import { formatTopic, formatDifficulty, formatDuration, getDurationSeconds } from "@/lib/utils";
 import { Clock, MessageSquare, Code2, BarChart3 } from "lucide-react";
 import Link from "next/link";
 
@@ -18,6 +18,7 @@ interface SessionData {
   mode: string;
   durationType: string;
   isComplete: boolean;
+  startedAt: string;
   turns: Array<{
     id: string;
     role: string;
@@ -34,15 +35,22 @@ interface SessionData {
   }>;
 }
 
-function Timer({ startedAt }: { startedAt: Date }) {
+function Timer({ startedAt, durationSeconds, onTimeUp }: { startedAt: Date; durationSeconds: number; onTimeUp?: () => void }) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt.getTime()) / 1000));
+      const newElapsed = Math.floor((Date.now() - startedAt.getTime()) / 1000);
+      setElapsed(newElapsed);
+      
+      // Check if time is up
+      if (newElapsed >= durationSeconds && onTimeUp) {
+        onTimeUp();
+        clearInterval(interval);
+      }
     }, 1000);
     return () => clearInterval(interval);
-  }, [startedAt]);
+  }, [startedAt, durationSeconds, onTimeUp]);
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
@@ -62,11 +70,26 @@ export default function InterviewPage() {
   const [firstMessage, setFirstMessage] = useState<string>("");
   const [history, setHistory] = useState<import("@/types").ChatMessage[]>([]);
   const [isComplete, setIsComplete] = useState(false);
-  const [startedAt] = useState(new Date());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const hasCode = session?.mode === "CODING" || session?.mode === "VOICE_CODING";
+
+  const handleTimeUp = async () => {
+    if (isComplete) return;
+    
+    // Mark interview as complete
+    setIsComplete(true);
+    
+    // Optionally call an API to mark the session as complete on the server
+    try {
+      await fetch(`/api/interview/${sessionId}/complete`, {
+        method: "POST",
+      });
+    } catch (err) {
+      console.error("Failed to mark interview as complete:", err);
+    }
+  };
 
   useEffect(() => {
     console.log('[InterviewPage] useEffect triggered, sessionId:', sessionId);
@@ -157,7 +180,11 @@ export default function InterviewPage() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-zinc-500">
             <Clock className="w-3.5 h-3.5" />
-            <Timer startedAt={startedAt} />
+            <Timer 
+              startedAt={new Date(session.startedAt)} 
+              durationSeconds={getDurationSeconds(session.durationType)}
+              onTimeUp={handleTimeUp}
+            />
           </div>
           <span className="text-xs text-zinc-600">
             {formatDuration(session.durationType)}
