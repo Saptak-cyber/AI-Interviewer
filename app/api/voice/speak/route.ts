@@ -21,8 +21,8 @@ export async function POST(req: NextRequest) {
     return new NextResponse(body, {
       status: 200,
       headers: {
-        // ElevenLabs defaults to MP3; we request audio/mpeg.
-        "Content-Type": "audio/mpeg",
+        // Kokoro TTS returns WAV audio.
+        "Content-Type": "audio/wav",
         "Content-Length": String(body.byteLength),
         "Cache-Control": "no-store",
       },

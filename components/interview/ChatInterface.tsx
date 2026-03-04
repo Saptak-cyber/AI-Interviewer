@@ -402,7 +402,7 @@ export default function ChatInterface({
         });
         if (!res.ok) { console.warn("TTS failed:", res.status); return; }
         const arrayBuffer = await res.arrayBuffer();
-        const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+        const blob = new Blob([arrayBuffer], { type: "audio/wav" });
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         currentAudioRef.current = audio;
