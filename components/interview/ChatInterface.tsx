@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, Volume2, VolumeX } from "lucide-react";
 import Button from "@/components/ui/Button";
 import VoiceRecorder from "./VoiceRecorder";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,8 @@ interface ChatInterfaceProps {
   initialMessage: string;
   onComplete: () => void;
 }
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function TypingIndicator() {
   return (
@@ -31,31 +33,71 @@ function TypingIndicator() {
   );
 }
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+function SpeakingIndicator() {
+  return (
+    <div className="flex items-end gap-3 justify-start">
+      <div className="w-8 h-8 rounded-full bg-indigo-600/50 flex items-center justify-center flex-shrink-0 text-sm animate-pulse">
+        AI
+      </div>
+      <div className="flex items-center gap-2 px-4 py-3 rounded-2xl rounded-bl-sm bg-zinc-800 border border-indigo-500/40 text-xs text-indigo-300">
+        <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+        Speaking…
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({
+  msg,
+  onReplay,
+  isSpeaking,
+  muted,
+}: {
+  msg: ChatMessage;
+  onReplay?: () => void;
+  isSpeaking?: boolean;
+  muted?: boolean;
+}) {
   const isAI = msg.role === "ai";
 
   return (
-    <div
-      className={cn(
-        "flex items-end gap-3",
-        isAI ? "justify-start" : "justify-end"
-      )}
-    >
+    <div className={cn("flex items-end gap-3", isAI ? "justify-start" : "justify-end")}>
       {isAI && (
-        <div className="w-8 h-8 rounded-full bg-indigo-600/30 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-300">
+        <div
+          className={cn(
+            "w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-300 transition-all",
+            isSpeaking
+              ? "bg-indigo-500/50 ring-2 ring-indigo-400/60 animate-pulse"
+              : "bg-indigo-600/30"
+          )}
+        >
           AI
         </div>
       )}
 
-      <div
-        className={cn(
-          "px-4 py-3 rounded-2xl max-w-[75%] text-sm leading-relaxed whitespace-pre-wrap",
-          isAI
-            ? "bg-zinc-800 border border-zinc-700 rounded-bl-sm text-zinc-100"
-            : "bg-indigo-600 rounded-br-sm text-white"
+      <div className="flex flex-col gap-1 max-w-[75%]">
+        <div
+          className={cn(
+            "px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap",
+            isAI
+              ? "bg-zinc-800 border border-zinc-700 rounded-bl-sm text-zinc-100"
+              : "bg-indigo-600 rounded-br-sm text-white"
+          )}
+        >
+          {msg.content}
+        </div>
+
+        {/* Replay button for AI messages in voice mode */}
+        {isAI && onReplay && !muted && (
+          <button
+            onClick={onReplay}
+            className="self-start flex items-center gap-1 text-xs text-zinc-600 hover:text-indigo-400 transition-colors px-1"
+            title="Replay audio"
+          >
+            <Volume2 className="w-3 h-3" />
+            Replay
+          </button>
         )}
-      >
-        {msg.content}
       </div>
 
       {!isAI && (
@@ -66,6 +108,8 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
     </div>
   );
 }
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ChatInterface({
   sessionId,
@@ -85,22 +129,107 @@ export default function ChatInterface({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isComplete, setIsComplete] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const [muted, setMuted] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const initialSpokenRef = useRef(false);
 
   const hasVoice = mode === "VOICE_TEXT" || mode === "VOICE_CODING";
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isSpeaking]);
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
   }, [input]);
+
+  // ── TTS helper ──────────────────────────────────────────────────────────────
+
+  const playTts = useCallback(
+    async (text: string, msgId: string) => {
+      if (muted) return;
+
+      // Stop any currently playing audio
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+
+      setIsSpeaking(true);
+      setSpeakingMsgId(msgId);
+
+      try {
+        const res = await fetch("/api/voice/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        if (!res.ok) {
+          // Fail silently — the text is already shown in the chat
+          console.warn("TTS failed:", res.status);
+          return;
+        }
+
+        const arrayBuffer = await res.arrayBuffer();
+        // ElevenLabs returns MP3 when Accept: audio/mpeg
+        const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(blob);
+
+        const audio = new Audio(url);
+        currentAudioRef.current = audio;
+
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          setIsSpeaking(false);
+          setSpeakingMsgId(null);
+          currentAudioRef.current = null;
+        };
+
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          setIsSpeaking(false);
+          setSpeakingMsgId(null);
+          currentAudioRef.current = null;
+        };
+
+        await audio.play();
+      } catch {
+        setIsSpeaking(false);
+        setSpeakingMsgId(null);
+      }
+    },
+    [muted]
+  );
+
+  // Speak the initial AI message once in voice mode
+  useEffect(() => {
+    if (initialSpokenRef.current) return;
+    if (hasVoice && !muted && initialMessage) {
+      initialSpokenRef.current = true;
+      void playTts(initialMessage, "initial");
+    }
+  }, [hasVoice, muted, initialMessage, playTts]);
+
+  function handleMuteToggle() {
+    if (!muted && currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+      setIsSpeaking(false);
+      setSpeakingMsgId(null);
+    }
+    setMuted((m) => !m);
+  }
+
+  // ── Send message ────────────────────────────────────────────────────────────
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -131,8 +260,9 @@ export default function ChatInterface({
           throw new Error(data.error ?? "Something went wrong");
         }
 
+        const msgId = `ai-${Date.now()}`;
         const aiMsg: ChatMessage = {
-          id: `ai-${Date.now()}`,
+          id: msgId,
           role: "ai",
           content: data.reply,
           kind: data.isComplete ? "SYSTEM" : "FOLLOWUP",
@@ -140,6 +270,11 @@ export default function ChatInterface({
         };
 
         setMessages((prev) => [...prev, aiMsg]);
+
+        // Speak the interviewer's reply in voice modes
+        if (hasVoice) {
+          void playTts(data.reply, msgId);
+        }
 
         if (data.isComplete) {
           setIsComplete(true);
@@ -161,7 +296,7 @@ export default function ChatInterface({
         setIsLoading(false);
       }
     },
-    [sessionId, isLoading, isComplete, onComplete]
+    [sessionId, isLoading, isComplete, onComplete, hasVoice, playTts]
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -172,18 +307,38 @@ export default function ChatInterface({
   }
 
   function handleVoiceTranscript(text: string) {
-    setInput((prev) => (prev ? `${prev} ${text}` : text));
-    textareaRef.current?.focus();
+    // In pure voice mode: auto-send. In VOICE_TEXT: append to textarea.
+    if (mode === "VOICE_CODING") {
+      // For coding mode, append to textarea so user can review before sending
+      setInput((prev) => (prev ? `${prev} ${text}` : text));
+      textareaRef.current?.focus();
+    } else {
+      // VOICE_TEXT: auto-send the transcript immediately
+      void sendMessage(text);
+    }
   }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 min-h-0">
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} />
+          <MessageBubble
+            key={msg.id}
+            msg={msg}
+            isSpeaking={speakingMsgId === msg.id}
+            muted={muted}
+            onReplay={
+              hasVoice && msg.role === "ai"
+                ? () => void playTts(msg.content, msg.id)
+                : undefined
+            }
+          />
         ))}
         {isLoading && <TypingIndicator />}
+        {isSpeaking && !isLoading && <SpeakingIndicator />}
         <div ref={messagesEndRef} />
       </div>
 
@@ -191,25 +346,50 @@ export default function ChatInterface({
       {!isComplete && (
         <div className="border-t border-zinc-800 px-4 py-3 bg-zinc-950/80 backdrop-blur-sm">
           <div className="flex items-end gap-2">
+            {/* Mute toggle (voice modes only) */}
+            {hasVoice && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleMuteToggle}
+                title={muted ? "Unmute interviewer" : "Mute interviewer"}
+                className="flex-shrink-0 h-10 w-10 p-0"
+              >
+                {muted ? (
+                  <VolumeX className="w-4 h-4 text-zinc-500" />
+                ) : (
+                  <Volume2 className="w-4 h-4 text-indigo-400" />
+                )}
+              </Button>
+            )}
+
+            {/* Voice recorder */}
             {hasVoice && (
               <VoiceRecorder
                 onTranscript={handleVoiceTranscript}
-                disabled={isLoading}
+                disabled={isLoading || isSpeaking}
               />
             )}
+
+            {/* Text input */}
             <div className="flex-1 relative">
               <textarea
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your answer… (Enter to send, Shift+Enter for new line)"
+                placeholder={
+                  hasVoice
+                    ? "Or type your answer… (Enter to send)"
+                    : "Type your answer… (Enter to send, Shift+Enter for new line)"
+                }
                 disabled={isLoading}
                 rows={1}
                 className="w-full resize-none bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-50 transition-all"
                 style={{ minHeight: "48px" }}
               />
             </div>
+
             <Button
               size="sm"
               onClick={() => sendMessage(input)}
@@ -223,9 +403,18 @@ export default function ChatInterface({
               )}
             </Button>
           </div>
-          <p className="text-xs text-zinc-600 mt-1.5 text-right">
-            Shift+Enter for new line
-          </p>
+
+          <div className="flex items-center justify-between mt-1.5">
+            {hasVoice && isSpeaking && (
+              <p className="text-xs text-indigo-400 flex items-center gap-1">
+                <Volume2 className="w-3 h-3" />
+                Interviewer is speaking…
+              </p>
+            )}
+            <p className="text-xs text-zinc-600 ml-auto">
+              {hasVoice ? "Speak or type your answer" : "Shift+Enter for new line"}
+            </p>
+          </div>
         </div>
       )}
 
