@@ -143,6 +143,10 @@ export default function ChatInterface({
 
   // Streaming AI bubble: accumulates tokens before the turn is complete
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
+  // Ref mirrors state so response_complete can read it in a plain call
+  // (avoids calling setMessages inside a setState updater, which React
+  // Strict Mode double-invokes producing duplicate message bubbles).
+  const streamingContentRef = useRef<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -153,7 +157,13 @@ export default function ChatInterface({
 
   // WS + AudioStreamPlayer refs
   const wsRef = useRef<WebSocket | null>(null);
+  // wsInstance is the same socket exposed as React state so child components
+  // (VoiceRecorder) re-render reactively when the connection is ready/gone.
+  const [wsInstance, setWsInstance] = useState<WebSocket | null>(null);
   const audioPlayerRef = useRef<AudioStreamPlayer | null>(null);
+
+  // Ref-based in-flight guard: always current regardless of closure staleness
+  const isSendingRef = useRef(false);
 
   // Stable refs so the WS effect doesn't depend on mutable values
   const mutedRef = useRef(muted);
@@ -177,13 +187,49 @@ export default function ChatInterface({
   }, []);
 
   // ── WebSocket lifecycle (voice modes only) ──────────────────────────────────
+  const [wsReconnectCount, setWsReconnectCount] = useState(0);
+  const wsReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsReconnectAttemptsRef = useRef(0); // ref so onclose side-effect runs once
+  const MAX_RECONNECT_ATTEMPTS = 5;
+
   useEffect(() => {
     if (!hasVoice) return;
+
+    let intentionalClose = false;
+    let wasEverOpen = false;
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${proto}//${window.location.host}/api/voice/ws?sessionId=${sessionId}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
+    ws.onopen = () => {
+      wasEverOpen = true;
+      wsReconnectAttemptsRef.current = 0; // reset on successful connect
+      setWsInstance(ws);
+    };
+
+    // Keepalive: ping every 100 s so proxies don't drop the idle connection
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 100_000);
+
+    ws.onclose = () => {
+      if (intentionalClose) return;
+      setWsInstance(null);
+      wsRef.current = null;
+      // Use a ref for the attempt count so this side-effect runs once even when
+      // React StrictMode double-invokes state updater functions.
+      if (wsReconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        const attempt = wsReconnectAttemptsRef.current;
+        wsReconnectAttemptsRef.current += 1;
+        wsReconnectTimerRef.current = setTimeout(() => {
+          setWsReconnectCount((n) => n + 1);
+        }, Math.min(1000 * 2 ** attempt, 15_000));
+      }
+    };
 
     ws.onmessage = (event: MessageEvent<string>) => {
       let msg: Record<string, unknown>;
@@ -209,6 +255,7 @@ export default function ChatInterface({
             },
           ]);
           // Start the streaming AI placeholder
+          streamingContentRef.current = "";
           setStreamingContent("");
           setIsLoading(true);
           break;
@@ -217,7 +264,8 @@ export default function ChatInterface({
         case "ai_text_chunk": {
           // Accumulate LLM tokens into the partial bubble
           const token = msg.text as string;
-          setStreamingContent((prev) => (prev ?? "") + token);
+          streamingContentRef.current = (streamingContentRef.current ?? "") + token;
+          setStreamingContent(streamingContentRef.current);
           break;
         }
 
@@ -243,23 +291,25 @@ export default function ChatInterface({
 
         case "response_complete": {
           const isNowComplete = msg.isComplete as boolean;
-          // Move streaming content into permanent message
-          setStreamingContent((content) => {
-            if (content !== null) {
-              const msgId = `ai-ws-${Date.now()}`;
-              setMessages((prev) => [
-                ...prev,
-                {
-                  id: msgId,
-                  role: "ai",
-                  content: content,
-                  kind: isNowComplete ? "SYSTEM" : "FOLLOWUP",
-                  createdAt: new Date(),
-                },
-              ]);
-            }
-            return null;
-          });
+          // Read from ref (not updater) so this side-effect runs exactly once.
+          // Using setStreamingContent(updaterFn) + setMessages inside it caused
+          // React Strict Mode to double-invoke the updater → duplicate bubbles.
+          const finalContent = streamingContentRef.current;
+          streamingContentRef.current = null;
+          setStreamingContent(null);
+          if (finalContent !== null) {
+            const msgId = `ai-ws-${Date.now()}`;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: msgId,
+                role: "ai",
+                content: finalContent,
+                kind: isNowComplete ? "SYSTEM" : "FOLLOWUP",
+                createdAt: new Date(),
+              },
+            ]);
+          }
           setIsLoading(false);
           if (isNowComplete) {
             setIsComplete(true);
@@ -270,6 +320,7 @@ export default function ChatInterface({
 
         case "error": {
           const message = msg.message as string;
+          streamingContentRef.current = null;
           setStreamingContent(null);
           setIsLoading(false);
           setMessages((prev) => [
@@ -288,23 +339,25 @@ export default function ChatInterface({
     };
 
     ws.onerror = () => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `err-ws-conn-${Date.now()}`,
-          role: "ai",
-          content: "Voice connection error. Try refreshing the page.",
-          kind: "SYSTEM",
-          createdAt: new Date(),
-        },
-      ]);
+      // Ignore errors on sockets that were never opened (e.g. React effect
+      // cleanup during hot-reload) or that we intentionally closed.
+      if (intentionalClose || !wasEverOpen) return;
+      console.warn("[ChatInterface] WebSocket error after connection was open");
     };
 
     return () => {
+      intentionalClose = true;
+      clearInterval(pingInterval);
+      if (wsReconnectTimerRef.current) {
+        clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+      }
       ws.close();
       wsRef.current = null;
+      setWsInstance(null);
     };
-  }, [sessionId, hasVoice]);
+  // wsReconnectCount is the reconnect trigger — intentionally included
+  }, [sessionId, hasVoice, wsReconnectCount]);
 
   // ── Scroll to bottom ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -362,11 +415,11 @@ export default function ChatInterface({
     if (initialSpokenRef.current) return;
     // For WS voice modes the server speaks the first message after the session
     // starts — we only use the legacy HTTP TTS for non-WS contexts.
-    if (hasVoice && !muted && initialMessage && !wsRef.current) {
+    if (hasVoice && !muted && initialMessage && !wsInstance) {
       initialSpokenRef.current = true;
       void playTts(initialMessage, "initial");
     }
-  }, [hasVoice, muted, initialMessage, playTts]);
+  }, [hasVoice, muted, initialMessage, playTts, wsInstance]);
 
   function handleMuteToggle() {
     if (!muted) {
@@ -399,7 +452,13 @@ export default function ChatInterface({
   // ── HTTP send message (TEXT / CODING modes) ─────────────────────────────────
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || isLoading || isComplete) return;
+      // Use a ref-based guard so concurrent/stale-closure double-calls are blocked
+      // regardless of whether `isLoading` state has flushed yet.
+      if (!text.trim() || isSendingRef.current || isComplete) return;
+      // In voice mode the WS pipeline handles everything — never use HTTP when
+      // the socket is open, or we'll get duplicate messages.
+      if (wsInstance) return;
+      isSendingRef.current = true;
 
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
@@ -432,7 +491,7 @@ export default function ChatInterface({
         setMessages((prev) => [...prev, aiMsg]);
 
         if (hasVoice) void playTts(data.reply, msgId);
-        if (data.isComplete) { setIsComplete(true); onComplete(); }
+        if (data.isComplete) { setIsComplete(true); onCompleteRef.current(); }
       } catch (err) {
         setMessages((prev) => [
           ...prev,
@@ -446,9 +505,13 @@ export default function ChatInterface({
         ]);
       } finally {
         setIsLoading(false);
+        isSendingRef.current = false;
       }
     },
-    [sessionId, isLoading, isComplete, onComplete, hasVoice, playTts]
+    // onComplete is accessed via onCompleteRef — no longer a dep.
+    // isLoading removed: the ref guard replaces it.
+    // wsInstance included so the guard sees the live socket state.
+    [sessionId, isComplete, hasVoice, playTts, wsInstance]
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -477,7 +540,7 @@ export default function ChatInterface({
             isSpeaking={speakingMsgId === msg.id}
             muted={muted}
             onReplay={
-              hasVoice && msg.role === "ai" && !wsRef.current
+              hasVoice && msg.role === "ai" && !wsInstance
                 ? () => void playTts(msg.content, msg.id)
                 : undefined
             }
@@ -526,8 +589,8 @@ export default function ChatInterface({
               <VoiceRecorder
                 onTranscript={handleVoiceTranscript}
                 onSpeechStart={handleUserSpeechStart}
-                disabled={isLoading && !isSpeaking}
-                ws={wsRef.current}
+                disabled={false}
+                ws={wsInstance}
               />
             )}
 
