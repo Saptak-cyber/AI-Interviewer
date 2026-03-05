@@ -15,6 +15,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "text is required" }, { status: 400 });
     }
 
+    // Use single TTS call for the entire text
+    // The synthesizeSpeech function will truncate if needed
     const audioBytes = await synthesizeSpeech(text);
     const body = Buffer.from(audioBytes);
 

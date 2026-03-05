@@ -387,36 +387,90 @@ export default function ChatInterface({
   // ── Legacy HTTP TTS (non-WS voice fallback) ─────────────────────────────────
   const playTts = useCallback(
     async (text: string, msgId: string) => {
+      console.log('[ChatInterface playTts] Called with text length:', text.length);
+      console.log('[ChatInterface playTts] Text:', text);
       if (muted) return;
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current = null;
       }
+      
+      // Split text into chunks of ~450 chars at sentence boundaries
+      const chunks: string[] = [];
+      const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+      let currentChunk = '';
+      
+      for (const sentence of sentences) {
+        const trimmedSentence = sentence.trim();
+        if (!trimmedSentence) continue;
+        
+        // If adding this sentence would exceed limit and we have content, save current chunk
+        if ((currentChunk + ' ' + trimmedSentence).length > 450 && currentChunk) {
+          chunks.push(currentChunk.trim());
+          currentChunk = trimmedSentence;
+        } else {
+          currentChunk = currentChunk ? currentChunk + ' ' + trimmedSentence : trimmedSentence;
+        }
+      }
+      
+      // Don't forget the last chunk
+      if (currentChunk.trim()) {
+        chunks.push(currentChunk.trim());
+      }
+      
+      console.log('[ChatInterface playTts] Split into', chunks.length, 'chunks:', chunks.map(c => c.substring(0, 50) + '...'));
+      
       setIsSpeaking(true);
       setSpeakingMsgId(msgId);
+      
       try {
-        const res = await fetch("/api/voice/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        });
-        if (!res.ok) { console.warn("TTS failed:", res.status); return; }
-        const arrayBuffer = await res.arrayBuffer();
-        const blob = new Blob([arrayBuffer], { type: "audio/wav" });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        currentAudioRef.current = audio;
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          setIsSpeaking(false); setSpeakingMsgId(null); currentAudioRef.current = null;
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(url);
-          setIsSpeaking(false); setSpeakingMsgId(null); currentAudioRef.current = null;
-        };
-        await audio.play();
-      } catch {
-        setIsSpeaking(false); setSpeakingMsgId(null);
+        // Play chunks sequentially
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          console.log('[ChatInterface playTts] Playing chunk', i + 1, 'of', chunks.length, 'length:', chunk.length);
+          console.log('[ChatInterface playTts] Chunk text:', chunk);
+          
+          const res = await fetch("/api/voice/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: chunk }),
+          });
+          
+          if (!res.ok) { 
+            console.warn("TTS failed for chunk", i + 1, ":", res.status); 
+            continue;
+          }
+          
+          const arrayBuffer = await res.arrayBuffer();
+          console.log('[ChatInterface playTts] Received audio for chunk', i + 1, 'size:', arrayBuffer.byteLength);
+          
+          const blob = new Blob([arrayBuffer], { type: "audio/wav" });
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          currentAudioRef.current = audio;
+          
+          // Wait for this chunk to finish before playing the next
+          await new Promise<void>((resolve, reject) => {
+            audio.onended = () => {
+              URL.revokeObjectURL(url);
+              resolve();
+            };
+            audio.onerror = () => {
+              URL.revokeObjectURL(url);
+              reject(new Error('Audio playback failed'));
+            };
+            audio.play().catch(reject);
+          });
+        }
+        
+        setIsSpeaking(false);
+        setSpeakingMsgId(null);
+        currentAudioRef.current = null;
+      } catch (err) {
+        console.error('[ChatInterface playTts] Error:', err);
+        setIsSpeaking(false);
+        setSpeakingMsgId(null);
+        currentAudioRef.current = null;
       }
     },
     [muted]
@@ -428,6 +482,8 @@ export default function ChatInterface({
     // For WS voice modes the server speaks the first message after the session
     // starts — we only use the legacy HTTP TTS for non-WS contexts.
     if (hasVoice && !muted && initialMessage && !wsInstance) {
+      console.log('[ChatInterface] Speaking initial message, length:', initialMessage.length);
+      console.log('[ChatInterface] Initial message:', initialMessage);
       initialSpokenRef.current = true;
       sessionStorage.setItem(`tts-spoken-${sessionId}`, "1");
       void playTts(initialMessage, "initial");

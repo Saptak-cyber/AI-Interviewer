@@ -167,13 +167,20 @@ export default function VoiceRecorder({
 
       const recorder = new MediaRecorder(stream, { mimeType });
       chunksRef.current = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.ondataavailable = (e) => { 
+        if (e.data.size > 0) {
+          console.log('[VoiceRecorder HTTP] Chunk received:', e.data.size, 'bytes');
+          chunksRef.current.push(e.data);
+        }
+      };
       recorder.onstop = async () => {
+        console.log('[VoiceRecorder HTTP] Recording stopped. Total chunks:', chunksRef.current.length);
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunksRef.current, { type: mimeType });
+        console.log('[VoiceRecorder HTTP] Final blob size:', blob.size, 'bytes');
         await transcribeBlob(blob, mimeType);
       };
-      recorder.start(250);
+      recorder.start(100);  // Changed from 250 to 100 to match WebSocket mode
       mediaRecorderRef.current = recorder;
       setHttpState("recording");
     } catch (err) {
@@ -194,16 +201,20 @@ export default function VoiceRecorder({
   }, []);
 
   async function transcribeBlob(blob: Blob, mimeType: string) {
+    console.log('[VoiceRecorder HTTP] transcribeBlob called with blob size:', blob.size, 'mimeType:', mimeType);
     try {
       const formData = new FormData();
       const ext = mimeType.includes("mp4") ? "mp4" : "webm";
       formData.append("audio", new File([blob], `recording.${ext}`, { type: mimeType }));
+      console.log('[VoiceRecorder HTTP] Sending to /api/voice/transcribe...');
       const res = await fetch("/api/voice/transcribe", { method: "POST", body: formData });
       const data = await res.json();
+      console.log('[VoiceRecorder HTTP] Transcribe response:', data);
       if (!res.ok || !data.transcript) throw new Error(data.error ?? "Transcription failed");
       onTranscript(data.transcript);
       setHttpState("idle");
     } catch (err) {
+      console.error('[VoiceRecorder HTTP] Transcription error:', err);
       setErrorMsg(err instanceof Error ? err.message : "Transcription failed");
       setHttpState("error");
     }
