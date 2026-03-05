@@ -70,7 +70,13 @@ export class AudioStreamPlayer {
       source.connect(ctx.destination);
 
       // Schedule back-to-back: start right after the previous segment ends
-      const startTime = Math.max(ctx.currentTime, this.nextStartTime);
+      // Initialize nextStartTime on first chunk or if it's fallen behind
+      const now = ctx.currentTime;
+      if (this.nextStartTime < now) {
+        this.nextStartTime = now;
+      }
+      
+      const startTime = this.nextStartTime;
       source.start(startTime);
       this.nextStartTime = startTime + audioBuffer.duration;
       this.activeSources.push(source);

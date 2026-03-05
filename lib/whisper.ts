@@ -10,6 +10,8 @@ export async function transcribeAudio(
   const apiKey = process.env.HUGGINGFACE_API_KEY;
   if (!apiKey) throw new Error("HUGGINGFACE_API_KEY is not set");
 
+  console.log('[whisper] Transcribing audio:', audioBuffer.length, 'bytes, mimeType:', mimeType);
+
   // Convert Node.js Buffer to Uint8Array for fetch compatibility
   const body = new Uint8Array(audioBuffer);
 
@@ -22,8 +24,11 @@ export async function transcribeAudio(
     body,
   });
 
+  console.log('[whisper] Response status:', response.status);
+
   if (!response.ok) {
     const errorText = await response.text();
+    console.error('[whisper] Error response:', errorText);
     // Model may be loading — return a helpful message instead of throwing
     if (response.status === 503) {
       throw new Error(
@@ -34,10 +39,13 @@ export async function transcribeAudio(
   }
 
   const result = (await response.json()) as { text?: string; error?: string };
+  console.log('[whisper] Result:', result);
 
   if (result.error) {
     throw new Error(`Whisper transcription error: ${result.error}`);
   }
 
-  return result.text?.trim() ?? "";
+  const transcript = result.text?.trim() ?? "";
+  console.log('[whisper] Final transcript:', transcript);
+  return transcript;
 }

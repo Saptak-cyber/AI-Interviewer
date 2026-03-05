@@ -118,12 +118,16 @@ export function handleVoiceConnection(ws: WebSocket, sessionId: string) {
 
         try {
           // 1. Decode audio from base64
+          console.log('[voice-pipeline] Received audio, base64 length:', msg.audio.length, 'mimeType:', msg.mimeType);
           const audioBuffer = Buffer.from(msg.audio, "base64");
+          console.log('[voice-pipeline] Decoded audio buffer size:', audioBuffer.length, 'bytes');
 
           // 2. Transcribe via Whisper
           let transcript: string;
           try {
+            console.log('[voice-pipeline] Sending to Whisper...');
             transcript = await transcribeAudio(audioBuffer, msg.mimeType);
+            console.log('[voice-pipeline] Whisper transcript:', transcript);
           } catch (sttErr) {
             if (signal.aborted) return;
             send(ws, {

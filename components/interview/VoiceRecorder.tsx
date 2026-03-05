@@ -120,10 +120,15 @@ export default function VoiceRecorder({
     const recorder = new MediaRecorder(stream, { mimeType });
     wsChunksRef.current = [];
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) wsChunksRef.current.push(e.data);
+      if (e.data.size > 0) {
+        console.log('[VoiceRecorder] Chunk received:', e.data.size, 'bytes');
+        wsChunksRef.current.push(e.data);
+      }
     };
     recorder.onstop = () => {
+      console.log('[VoiceRecorder] Recording stopped. Total chunks:', wsChunksRef.current.length);
       const blob = new Blob(wsChunksRef.current, { type: mimeType });
+      console.log('[VoiceRecorder] Final blob size:', blob.size, 'bytes');
       sendBlob(blob, mimeType);
     };
     recorder.start(100);
@@ -132,13 +137,16 @@ export default function VoiceRecorder({
   }, [wsState, onSpeechStart]);
 
   function sendBlob(blob: Blob, mimeType: string) {
+    console.log('[VoiceRecorder] sendBlob called with blob size:', blob.size, 'mimeType:', mimeType);
     if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn('[VoiceRecorder] WebSocket not open, state:', ws?.readyState);
       setWsState("ready");
       return;
     }
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(",")[1];
+      console.log('[VoiceRecorder] Sending base64 audio, length:', base64.length);
       ws.send(JSON.stringify({ type: "end_of_speech", audio: base64, mimeType }));
       setWsState("ready");
     };
