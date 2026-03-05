@@ -7,6 +7,10 @@ import VoiceRecorder from "./VoiceRecorder";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, InterviewMode } from "@/types";
 import { AudioStreamPlayer } from "@/lib/audio-player";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
 
 interface ChatInterfaceProps {
   sessionId: string;
@@ -81,13 +85,53 @@ function MessageBubble({
       <div className="flex flex-col gap-1 max-w-[75%]">
         <div
           className={cn(
-            "px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap",
+            "px-4 py-3 rounded-2xl text-sm leading-relaxed",
             isAI
-              ? "bg-zinc-800 border border-zinc-700 rounded-bl-sm text-zinc-100"
-              : "bg-indigo-600 rounded-br-sm text-white"
+              ? "bg-zinc-800 border border-zinc-700 rounded-bl-sm text-zinc-100 prose prose-invert prose-sm max-w-none"
+              : "bg-indigo-600 rounded-br-sm text-white whitespace-pre-wrap"
           )}
         >
-          {msg.content}
+          {isAI ? (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeHighlight]}
+              components={{
+                // Customize markdown elements styling
+                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                code: ({ inline, className, children, ...props }: any) => {
+                  return inline ? (
+                    <code className="bg-zinc-700 px-1.5 py-0.5 rounded text-xs text-indigo-300" {...props}>
+                      {children}
+                    </code>
+                  ) : (
+                    <code className={cn("block bg-zinc-900 p-3 rounded-lg overflow-x-auto text-xs", className)} {...props}>
+                      {children}
+                    </code>
+                  );
+                },
+                pre: ({ children }) => <pre className="bg-zinc-900 rounded-lg overflow-hidden my-2">{children}</pre>,
+                ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                li: ({ children }) => <li className="ml-2">{children}</li>,
+                strong: ({ children }) => <strong className="font-semibold text-indigo-200">{children}</strong>,
+                em: ({ children }) => <em className="italic text-zinc-300">{children}</em>,
+                a: ({ href, children }) => (
+                  <a href={href} className="text-indigo-400 hover:text-indigo-300 underline" target="_blank" rel="noopener noreferrer">
+                    {children}
+                  </a>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-4 border-indigo-500 pl-4 italic text-zinc-400 my-2">
+                    {children}
+                  </blockquote>
+                ),
+              }}
+            >
+              {msg.content}
+            </ReactMarkdown>
+          ) : (
+            msg.content
+          )}
         </div>
 
         {/* Replay button for AI messages in voice mode */}
@@ -674,8 +718,43 @@ export default function ChatInterface({
             <div className="w-8 h-8 rounded-full bg-indigo-600/50 flex items-center justify-center flex-shrink-0 text-xs font-bold text-indigo-300 animate-pulse">
               AI
             </div>
-            <div className="px-4 py-3 rounded-2xl rounded-bl-sm bg-zinc-800 border border-indigo-500/30 text-sm text-zinc-100 leading-relaxed whitespace-pre-wrap max-w-[75%]">
-              {streamingContent}
+            <div className="px-4 py-3 rounded-2xl rounded-bl-sm bg-zinc-800 border border-indigo-500/30 text-sm text-zinc-100 leading-relaxed max-w-[75%] prose prose-invert prose-sm">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight]}
+                components={{
+                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                  code: ({ inline, className, children, ...props }: any) => {
+                    return inline ? (
+                      <code className="bg-zinc-700 px-1.5 py-0.5 rounded text-xs text-indigo-300" {...props}>
+                        {children}
+                      </code>
+                    ) : (
+                      <code className={cn("block bg-zinc-900 p-3 rounded-lg overflow-x-auto text-xs", className)} {...props}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  pre: ({ children }) => <pre className="bg-zinc-900 rounded-lg overflow-hidden my-2">{children}</pre>,
+                  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="ml-2">{children}</li>,
+                  strong: ({ children }) => <strong className="font-semibold text-indigo-200">{children}</strong>,
+                  em: ({ children }) => <em className="italic text-zinc-300">{children}</em>,
+                  a: ({ href, children }) => (
+                    <a href={href} className="text-indigo-400 hover:text-indigo-300 underline" target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-indigo-500 pl-4 italic text-zinc-400 my-2">
+                      {children}
+                    </blockquote>
+                  ),
+                }}
+              >
+                {streamingContent}
+              </ReactMarkdown>
               <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-indigo-400 animate-pulse rounded-sm align-text-bottom" />
             </div>
           </div>
