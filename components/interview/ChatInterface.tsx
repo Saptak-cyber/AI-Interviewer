@@ -394,15 +394,12 @@ export default function ChatInterface({
         currentAudioRef.current = null;
       }
       
-      // With streaming mode, Kokoro can handle up to 5000 chars
-      // Split into chunks of ~4500 chars at sentence boundaries for safety
+      // Split into smaller chunks for faster response
       const chunks: string[] = [];
       
-      if (text.length <= 4500) {
-        // Single chunk - no splitting needed
+      if (text.length <= 250) {
         chunks.push(text);
       } else {
-        // Split at sentence boundaries
         const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
         let currentChunk = '';
         
@@ -410,8 +407,7 @@ export default function ChatInterface({
           const trimmedSentence = sentence.trim();
           if (!trimmedSentence) continue;
           
-          // If adding this sentence would exceed limit and we have content, save current chunk
-          if ((currentChunk + ' ' + trimmedSentence).length > 4500 && currentChunk) {
+          if ((currentChunk + ' ' + trimmedSentence).length > 250 && currentChunk) {
             chunks.push(currentChunk.trim());
             currentChunk = trimmedSentence;
           } else {
@@ -419,7 +415,6 @@ export default function ChatInterface({
           }
         }
         
-        // Don't forget the last chunk
         if (currentChunk.trim()) {
           chunks.push(currentChunk.trim());
         }
@@ -431,32 +426,77 @@ export default function ChatInterface({
       setSpeakingMsgId(msgId);
       
       try {
-        // Play chunks sequentially
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          console.log('[ChatInterface playTts] Playing chunk', i + 1, 'of', chunks.length, 'length:', chunk.length);
+        // Pipeline: fetch chunk N, start playing it, immediately start fetching chunk N+1
+        const audioQueue: (ArrayBuffer | null)[] = [];
+        let playbackIndex = 0;
+        let fetchIndex = 0;
+        let allFetched = false;
+        
+        // Function to fetch the next chunk
+        const fetchNextChunk = async () => {
+          if (fetchIndex >= chunks.length) {
+            allFetched = true;
+            return;
+          }
           
-          const res = await fetch("/api/voice/speak", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: chunk }),
-          });
+          const index = fetchIndex;
+          fetchIndex++;
+          const chunk = chunks[index];
           
-          if (!res.ok) { 
-            console.warn("TTS failed for chunk", i + 1, ":", res.status); 
+          console.log('[ChatInterface playTts] Fetching chunk', index + 1, 'of', chunks.length, 'length:', chunk.length);
+          const chunkStart = Date.now();
+          
+          try {
+            const res = await fetch("/api/voice/speak", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: chunk }),
+            });
+            
+            if (!res.ok) {
+              console.warn("TTS failed for chunk", index + 1, ":", res.status);
+              audioQueue[index] = null; // Mark as failed
+              return;
+            }
+            
+            const arrayBuffer = await res.arrayBuffer();
+            console.log('[ChatInterface playTts] Chunk', index + 1, 'received in', Date.now() - chunkStart, 'ms, size:', arrayBuffer.byteLength);
+            audioQueue[index] = arrayBuffer;
+          } catch (err) {
+            console.error('[ChatInterface playTts] Error fetching chunk', index + 1, ':', err);
+            audioQueue[index] = null; // Mark as failed
+          }
+        };
+        
+        // Fetch first chunk
+        await fetchNextChunk();
+        
+        // Play chunks as they become available
+        while (playbackIndex < chunks.length) {
+          // Wait for this chunk to be fetched
+          while (audioQueue[playbackIndex] === undefined) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+          
+          const buffer = audioQueue[playbackIndex];
+          
+          // Skip failed chunks
+          if (buffer === null) {
+            console.warn('[ChatInterface playTts] Skipping failed chunk', playbackIndex + 1);
+            playbackIndex++;
             continue;
           }
           
-          const arrayBuffer = await res.arrayBuffer();
-          console.log('[ChatInterface playTts] Received audio for chunk', i + 1, 'size:', arrayBuffer.byteLength);
+          // Play this chunk
+          console.log('[ChatInterface playTts] Playing chunk', playbackIndex + 1, 'of', chunks.length);
           
-          const blob = new Blob([arrayBuffer], { type: "audio/wav" });
+          const blob = new Blob([buffer], { type: "audio/wav" });
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           currentAudioRef.current = audio;
           
-          // Wait for this chunk to finish before playing the next
-          await new Promise<void>((resolve, reject) => {
+          // Start playing this chunk
+          const playPromise = new Promise<void>((resolve, reject) => {
             audio.onended = () => {
               URL.revokeObjectURL(url);
               resolve();
@@ -467,6 +507,16 @@ export default function ChatInterface({
             };
             audio.play().catch(reject);
           });
+          
+          // Immediately start fetching the next chunk (don't wait for playback to finish)
+          if (!allFetched) {
+            fetchNextChunk(); // Fire and forget - runs in parallel with playback
+          }
+          
+          // Wait for this chunk to finish playing before moving to next
+          await playPromise;
+          console.log('[ChatInterface playTts] Chunk', playbackIndex + 1, 'finished playing');
+          playbackIndex++;
         }
         
         setIsSpeaking(false);
