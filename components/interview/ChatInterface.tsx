@@ -388,37 +388,44 @@ export default function ChatInterface({
   const playTts = useCallback(
     async (text: string, msgId: string) => {
       console.log('[ChatInterface playTts] Called with text length:', text.length);
-      console.log('[ChatInterface playTts] Text:', text);
       if (muted) return;
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
         currentAudioRef.current = null;
       }
       
-      // Split text into chunks of ~450 chars at sentence boundaries
+      // With streaming mode, Kokoro can handle up to 5000 chars
+      // Split into chunks of ~4500 chars at sentence boundaries for safety
       const chunks: string[] = [];
-      const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
-      let currentChunk = '';
       
-      for (const sentence of sentences) {
-        const trimmedSentence = sentence.trim();
-        if (!trimmedSentence) continue;
+      if (text.length <= 4500) {
+        // Single chunk - no splitting needed
+        chunks.push(text);
+      } else {
+        // Split at sentence boundaries
+        const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+        let currentChunk = '';
         
-        // If adding this sentence would exceed limit and we have content, save current chunk
-        if ((currentChunk + ' ' + trimmedSentence).length > 450 && currentChunk) {
+        for (const sentence of sentences) {
+          const trimmedSentence = sentence.trim();
+          if (!trimmedSentence) continue;
+          
+          // If adding this sentence would exceed limit and we have content, save current chunk
+          if ((currentChunk + ' ' + trimmedSentence).length > 4500 && currentChunk) {
+            chunks.push(currentChunk.trim());
+            currentChunk = trimmedSentence;
+          } else {
+            currentChunk = currentChunk ? currentChunk + ' ' + trimmedSentence : trimmedSentence;
+          }
+        }
+        
+        // Don't forget the last chunk
+        if (currentChunk.trim()) {
           chunks.push(currentChunk.trim());
-          currentChunk = trimmedSentence;
-        } else {
-          currentChunk = currentChunk ? currentChunk + ' ' + trimmedSentence : trimmedSentence;
         }
       }
       
-      // Don't forget the last chunk
-      if (currentChunk.trim()) {
-        chunks.push(currentChunk.trim());
-      }
-      
-      console.log('[ChatInterface playTts] Split into', chunks.length, 'chunks:', chunks.map(c => c.substring(0, 50) + '...'));
+      console.log('[ChatInterface playTts] Split into', chunks.length, 'chunk(s)');
       
       setIsSpeaking(true);
       setSpeakingMsgId(msgId);
@@ -428,7 +435,6 @@ export default function ChatInterface({
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
           console.log('[ChatInterface playTts] Playing chunk', i + 1, 'of', chunks.length, 'length:', chunk.length);
-          console.log('[ChatInterface playTts] Chunk text:', chunk);
           
           const res = await fetch("/api/voice/speak", {
             method: "POST",
