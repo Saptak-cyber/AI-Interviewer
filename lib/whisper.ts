@@ -46,6 +46,31 @@ export async function transcribeAudio(
   }
 
   const transcript = result.text?.trim() ?? "";
+  console.log('[whisper] Raw transcript:', transcript);
+  
+  // Filter out common Whisper hallucinations when there's silence/noise
+  const hallucinations = [
+    "thank you",
+    "thank you.",
+    "Thank you.",
+    "thanks",
+    "thank you for watching",
+    "thank you for listening",
+    "bye",
+    "goodbye",
+    "you",
+    ".",
+    "...",
+  ];
+  
+  const lowerTranscript = transcript.toLowerCase();
+  const isHallucination = hallucinations.some(h => lowerTranscript === h);
+  
+  if (isHallucination) {
+    console.log('[whisper] Detected hallucination, returning empty string');
+    return "";
+  }
+  
   console.log('[whisper] Final transcript:', transcript);
   return transcript;
 }

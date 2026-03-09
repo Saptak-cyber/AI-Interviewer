@@ -234,7 +234,60 @@ export default function InterviewPage() {
                 onComplete={() => setIsComplete(true)}
                 currentCode={currentCode}
                 onNewAIMessage={(content, kind) => {
-                  if (kind === "QUESTION" || kind === "FOLLOWUP") {
+                  // Only reset editor for NEW coding problems, not follow-ups
+                  
+                  // Keywords that indicate it's a follow-up, not a new problem
+                  const followUpKeywords = [
+                    "can you",
+                    "could you",
+                    "please",
+                    "also",
+                    "additionally",
+                    "what about",
+                    "how about",
+                    "what is the",
+                    "are you considering",
+                    "don't forget",
+                    "you're missing",
+                    "it seems like",
+                    "implement the",
+                    "define the",
+                    "explain",
+                    "time complexity",
+                    "space complexity",
+                    "edge cases",
+                    "optimize",
+                  ];
+                  
+                  const lowerContent = content.toLowerCase();
+                  const isFollowUp = followUpKeywords.some(keyword => lowerContent.includes(keyword));
+                  
+                  // Keywords that strongly indicate a NEW problem
+                  const newProblemKeywords = [
+                    "next question",
+                    "next problem",
+                    "new question",
+                    "new problem",
+                    "moving on",
+                    "let's move to",
+                    "here's another",
+                    "second question",
+                    "third question",
+                  ];
+                  
+                  const isNewProblem = newProblemKeywords.some(keyword => lowerContent.includes(keyword));
+                  
+                  // Only reset if:
+                  // 1. Explicitly marked as QUESTION kind, OR
+                  // 2. Contains new problem keywords and is long (>200 chars), OR
+                  // 3. Is very long (>500 chars) and NOT a follow-up
+                  const shouldReset = 
+                    kind === "QUESTION" ||
+                    (isNewProblem && content.length > 200) ||
+                    (content.length > 500 && !isFollowUp && content !== latestQuestion);
+                  
+                  if (shouldReset) {
+                    console.log('[InterviewPage] New question detected, updating latestQuestion');
                     setLatestQuestion(content);
                   }
                 }}
