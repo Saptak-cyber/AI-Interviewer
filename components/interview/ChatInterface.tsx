@@ -19,6 +19,10 @@ interface ChatInterfaceProps {
   onComplete: () => void;
   /** Full prior history — used to restore chat after a page refresh. */
   initialHistory?: ChatMessage[];
+  /** Current code from the editor (if in coding mode) */
+  currentCode?: { code: string; language: string } | null;
+  /** Called when a new AI message arrives */
+  onNewAIMessage?: (content: string, kind: import("@/types").TurnKind) => void;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -164,6 +168,8 @@ export default function ChatInterface({
   initialMessage,
   onComplete,
   initialHistory,
+  currentCode,
+  onNewAIMessage,
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(
     initialHistory && initialHistory.length > 0
@@ -349,16 +355,20 @@ export default function ChatInterface({
           setStreamingContent(null);
           if (finalContent !== null) {
             const msgId = `ai-ws-${Date.now()}`;
+            const msgKind = isNowComplete ? "SYSTEM" : "FOLLOWUP";
             setMessages((prev) => [
               ...prev,
               {
                 id: msgId,
                 role: "ai",
                 content: finalContent,
-                kind: isNowComplete ? "SYSTEM" : "FOLLOWUP",
+                kind: msgKind,
                 createdAt: new Date(),
               },
             ]);
+            
+            // Notify parent of new AI message
+            onNewAIMessage?.(finalContent, msgKind);
           }
           setIsLoading(false);
           // Safety net: if audio player never fires onPlaybackEnd (e.g. suspended
@@ -638,10 +648,21 @@ export default function ChatInterface({
       setIsLoading(true);
 
       try {
+        const requestBody: any = { 
+          sessionId, 
+          message: text.trim()
+        };
+        
+        // Include code context if available
+        if (currentCode && currentCode.code.trim()) {
+          requestBody.code = currentCode.code;
+          requestBody.language = currentCode.language;
+        }
+        
         const res = await fetch("/api/interview/message", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, message: text.trim() }),
+          body: JSON.stringify(requestBody),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Something went wrong");
@@ -655,6 +676,9 @@ export default function ChatInterface({
           createdAt: new Date(),
         };
         setMessages((prev) => [...prev, aiMsg]);
+        
+        // Notify parent of new AI message
+        onNewAIMessage?.(data.reply, aiMsg.kind);
 
         if (hasVoice) void playTts(data.reply, msgId);
         if (data.isComplete) { setIsComplete(true); onCompleteRef.current(); }
@@ -676,7 +700,7 @@ export default function ChatInterface({
     },
     // onComplete is accessed via onCompleteRef — no longer a dep.
     // isLoading removed: the ref guard replaces it.
-    [sessionId, isComplete, hasVoice, playTts]
+    [sessionId, isComplete, hasVoice, playTts, currentCode]
   );
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -791,6 +815,7 @@ export default function ChatInterface({
                 onSpeechStart={handleUserSpeechStart}
                 disabled={false}
                 ws={wsInstance}
+                currentCode={currentCode}
               />
             )}
 

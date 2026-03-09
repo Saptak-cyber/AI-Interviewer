@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Button from "@/components/ui/Button";
 import { Play, Loader2, ChevronDown, ChevronUp } from "lucide-react";
@@ -18,6 +18,7 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 interface CodeEditorProps {
   sessionId: string;
   question: string;
+  onCodeChange?: (code: string, language: string) => void;
 }
 
 const LANGUAGES = ["javascript", "typescript", "python", "java", "cpp"];
@@ -29,13 +30,37 @@ const DEFAULT_CODE: Record<string, string> = {
   cpp: "// Write your solution here\n#include <bits/stdc++.h>\nusing namespace std;\n\nvoid solution() {\n    \n}\n",
 };
 
-export default function CodeEditor({ sessionId, question }: CodeEditorProps) {
+export default function CodeEditor({ sessionId, question, onCodeChange }: CodeEditorProps) {
   const [language, setLanguage] = useState("javascript");
   const [code, setCode] = useState(DEFAULT_CODE["javascript"]);
   const [isRunning, setIsRunning] = useState(false);
   const [analysis, setAnalysis] = useState<CodeAnalysis | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Track the previous question to detect when it changes
+  const prevQuestionRef = useRef(question);
+
+  // Reset code editor when question changes
+  useEffect(() => {
+    if (question && question !== prevQuestionRef.current) {
+      console.log('[CodeEditor] New question detected, resetting editor');
+      const newCode = DEFAULT_CODE[language] ?? "";
+      setCode(newCode);
+      setAnalysis(null);
+      setShowAnalysis(false);
+      setError(null);
+      onCodeChange?.(newCode, language);
+      prevQuestionRef.current = question;
+    }
+  }, [question, language, onCodeChange]);
+
+  // Notify parent when code changes
+  function handleCodeChange(value: string | undefined) {
+    const newCode = value ?? "";
+    setCode(newCode);
+    onCodeChange?.(newCode, language);
+  }
 
   async function handleRun() {
     if (!code.trim()) return;
@@ -63,8 +88,10 @@ export default function CodeEditor({ sessionId, question }: CodeEditorProps) {
 
   function handleLanguageChange(lang: string) {
     setLanguage(lang);
-    setCode(DEFAULT_CODE[lang] ?? "");
+    const newCode = DEFAULT_CODE[lang] ?? "";
+    setCode(newCode);
     setAnalysis(null);
+    onCodeChange?.(newCode, lang);
   }
 
   return (
@@ -104,7 +131,7 @@ export default function CodeEditor({ sessionId, question }: CodeEditorProps) {
           height="100%"
           language={language}
           value={code}
-          onChange={(val) => setCode(val ?? "")}
+          onChange={handleCodeChange}
           theme="vs-dark"
           options={{
             fontSize: 13,

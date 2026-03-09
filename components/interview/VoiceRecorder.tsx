@@ -20,6 +20,8 @@ interface VoiceRecorderProps {
    *  - onTranscript is NOT called in this mode; transcript arrives via WS message.
    */
   ws?: WebSocket | null;
+  /** Current code from editor (if in coding mode) */
+  currentCode?: { code: string; language: string } | null;
 }
 
 // ─── States ───────────────────────────────────────────────────────────────────
@@ -34,6 +36,7 @@ export default function VoiceRecorder({
   onSpeechStart,
   disabled,
   ws,
+  currentCode,
 }: VoiceRecorderProps) {
   const isWsMode = ws != null;
 
@@ -147,7 +150,21 @@ export default function VoiceRecorder({
     reader.onloadend = () => {
       const base64 = (reader.result as string).split(",")[1];
       console.log('[VoiceRecorder] Sending base64 audio, length:', base64.length);
-      ws.send(JSON.stringify({ type: "end_of_speech", audio: base64, mimeType }));
+      
+      const message: any = { 
+        type: "end_of_speech", 
+        audio: base64, 
+        mimeType 
+      };
+      
+      // Include code context if available
+      if (currentCode && currentCode.code.trim()) {
+        message.code = currentCode.code;
+        message.language = currentCode.language;
+        console.log('[VoiceRecorder] Including code context, language:', currentCode.language);
+      }
+      
+      ws.send(JSON.stringify(message));
       setWsState("ready");
     };
     reader.readAsDataURL(blob);

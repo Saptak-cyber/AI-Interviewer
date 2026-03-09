@@ -35,10 +35,15 @@ interface SessionData {
   }>;
 }
 
-function Timer({ startedAt, durationSeconds, onTimeUp }: { startedAt: Date; durationSeconds: number; onTimeUp?: () => void }) {
+function Timer({ startedAt, durationSeconds, onTimeUp, isComplete }: { startedAt: Date; durationSeconds: number; onTimeUp?: () => void; isComplete?: boolean }) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
+    // Don't start timer if interview is already complete
+    if (isComplete) {
+      return;
+    }
+    
     const interval = setInterval(() => {
       const newElapsed = Math.floor((Date.now() - startedAt.getTime()) / 1000);
       setElapsed(newElapsed);
@@ -50,7 +55,7 @@ function Timer({ startedAt, durationSeconds, onTimeUp }: { startedAt: Date; dura
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [startedAt, durationSeconds, onTimeUp]);
+  }, [startedAt, durationSeconds, onTimeUp, isComplete]);
 
   const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
   const ss = String(elapsed % 60).padStart(2, "0");
@@ -72,6 +77,8 @@ export default function InterviewPage() {
   const [isComplete, setIsComplete] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [currentCode, setCurrentCode] = useState<{ code: string; language: string } | null>(null);
+  const [latestQuestion, setLatestQuestion] = useState<string>("");
 
   const hasCode = session?.mode === "CODING" || session?.mode === "VOICE_CODING";
 
@@ -111,6 +118,7 @@ export default function InterviewPage() {
         const firstAiTurn = sess.turns.find((t) => t.role === "AI");
         if (firstAiTurn) {
           setFirstMessage(firstAiTurn.content);
+          setLatestQuestion(firstAiTurn.content);
         }
 
         // Build the full history so ChatInterface can restore on refresh
@@ -122,6 +130,14 @@ export default function InterviewPage() {
           createdAt: new Date(t.createdAt),
         }));
         setHistory(history);
+        
+        // Find the latest AI question (QUESTION or FOLLOWUP kind)
+        const latestAiQuestion = [...sess.turns]
+          .reverse()
+          .find((t) => t.role === "AI" && (t.kind === "QUESTION" || t.kind === "FOLLOWUP"));
+        if (latestAiQuestion) {
+          setLatestQuestion(latestAiQuestion.content);
+        }
 
         if (sess.isComplete) {
           setIsComplete(true);
@@ -184,6 +200,7 @@ export default function InterviewPage() {
               startedAt={new Date(session.startedAt)} 
               durationSeconds={getDurationSeconds(session.durationType)}
               onTimeUp={handleTimeUp}
+              isComplete={isComplete}
             />
           </div>
           <span className="text-xs text-zinc-600">
@@ -215,6 +232,12 @@ export default function InterviewPage() {
                 initialMessage={firstMessage}
                 initialHistory={history}
                 onComplete={() => setIsComplete(true)}
+                currentCode={currentCode}
+                onNewAIMessage={(content, kind) => {
+                  if (kind === "QUESTION" || kind === "FOLLOWUP") {
+                    setLatestQuestion(content);
+                  }
+                }}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
@@ -244,7 +267,8 @@ export default function InterviewPage() {
             <div className="flex-1 min-h-0">
               <CodeEditor
                 sessionId={sessionId}
-                question={firstMessage}
+                question={latestQuestion}
+                onCodeChange={(code, language) => setCurrentCode({ code, language })}
               />
             </div>
           </div>

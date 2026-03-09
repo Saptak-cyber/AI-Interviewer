@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as MessageRequest;
-    const { sessionId, message } = body;
+    const { sessionId, message, code, language } = body;
 
     if (!sessionId || !message?.trim()) {
       return NextResponse.json(
@@ -51,11 +51,17 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Append user message to conversation history
-    state.conversationHistory.push({ role: "user", content: message });
+    // Build the user message with code context if provided
+    let userMessage = message;
+    if (code && code.trim()) {
+      userMessage = `${message}\n\n[Current code in editor (${language}):]:\n\`\`\`${language}\n${code}\n\`\`\``;
+    }
 
-    // Call LLM
-    const { reply, isComplete } = await callInterviewerLLM(state, message);
+    // Append user message to conversation history
+    state.conversationHistory.push({ role: "user", content: userMessage });
+
+    // Call LLM with the enriched message
+    const { reply, isComplete } = await callInterviewerLLM(state, userMessage);
 
     // Append AI reply to history
     state.conversationHistory.push({ role: "assistant", content: reply });

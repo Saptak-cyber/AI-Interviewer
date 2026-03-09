@@ -117,6 +117,8 @@ export interface StartInterviewResponse {
 export interface MessageRequest {
   sessionId: string;
   message: string;
+  code?: string;
+  language?: string;
 }
 
 export interface MessageResponse {

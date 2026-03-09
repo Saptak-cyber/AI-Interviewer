@@ -35,7 +35,7 @@ import { prisma } from "./prisma";
 // ─── Message types ─────────────────────────────────────────────────────────────
 
 type ClientMessage =
-  | { type: "end_of_speech"; audio: string; mimeType: string }
+  | { type: "end_of_speech"; audio: string; mimeType: string; code?: string; language?: string }
   | { type: "interrupt" }
   | { type: "ping" };
 
@@ -166,7 +166,14 @@ export function handleVoiceConnection(ws: WebSocket, sessionId: string) {
           await prisma.interviewTurn.create({
             data: { sessionId, role: "USER", kind: "ANSWER", content: transcript },
           });
-          state.conversationHistory.push({ role: "user", content: transcript });
+          
+          // Build the user message with code context if provided
+          let userMessage = transcript;
+          if (msg.code && msg.code.trim()) {
+            userMessage = `${transcript}\n\n[Current code in editor (${msg.language}):]:\n\`\`\`${msg.language}\n${msg.code}\n\`\`\``;
+          }
+          
+          state.conversationHistory.push({ role: "user", content: userMessage });
 
           if (signal.aborted) return;
 
@@ -179,7 +186,7 @@ export function handleVoiceConnection(ws: WebSocket, sessionId: string) {
 
           for await (const token of callInterviewerLLMStream(
             state,
-            transcript,
+            userMessage,
             signal
           )) {
             if (signal.aborted) break;
