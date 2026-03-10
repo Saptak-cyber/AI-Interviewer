@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { handleVoiceConnection } from "./lib/voice-pipeline";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME ?? "localhost";
+const hostname = process.env.HOSTNAME ?? (dev ? "localhost" : "0.0.0.0");
 const port = parseInt(process.env.PORT ?? "3000", 10);
 
 const app = next({ dev, hostname, port });
