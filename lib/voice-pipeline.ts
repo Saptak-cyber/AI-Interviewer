@@ -239,9 +239,33 @@ export function handleVoiceConnection(ws: WebSocket, sessionId: string) {
           if (signal.aborted) return;
 
           // 7. Detect completion sentinel
-          const isComplete = fullReply
+          let isComplete = fullReply
             .toLowerCase()
             .includes("that wraps up our interview");
+          
+          // Additional safeguard for coding interviews: don't allow completion unless
+          // we've seen code from the candidate in recent messages
+          if (isComplete && (state.mode === "CODING" || state.mode === "VOICE_CODING")) {
+            // Check if the last few user messages contain code indicators
+            const recentUserMessages = state.conversationHistory
+              .filter(m => m.role === "user")
+              .slice(-3); // Last 3 user messages
+            
+            const hasSharedCode = recentUserMessages.some(m => 
+              m.content.includes("```") || // Code block
+              m.content.includes("class ") || // Java/C++ class
+              m.content.includes("def ") || // Python function
+              m.content.includes("function ") || // JavaScript function
+              m.content.includes("public ") || // Java public
+              m.content.includes("private ") || // Java private
+              m.content.length > 200 // Long message likely containing code
+            );
+            
+            if (!hasSharedCode) {
+              console.warn('[voice-pipeline] Prevented premature completion - no code detected in recent messages');
+              isComplete = false;
+            }
+          }
 
           // 8. Persist AI reply and update state
           state.conversationHistory.push({ role: "assistant", content: fullReply });

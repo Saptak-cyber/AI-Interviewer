@@ -51,6 +51,7 @@ INTERVIEW CONFIGURATION:
 - Candidate Experience: ${experienceMap[state.experienceLevel]}
 - Interview Mode: ${formatLabel(state.mode)}
 - Max Questions: ${maxQuestions}
+- Current Question: ${state.questionIndex + 1} of ${maxQuestions}
 
 CRITICAL RULES FOR CODING INTERVIEWS:
 - NEVER end the interview while the candidate is still working on code
@@ -58,6 +59,8 @@ CRITICAL RULES FOR CODING INTERVIEWS:
 - Do NOT conclude until you see the candidate's actual implementation in the code editor
 - If the candidate says "let me write the code" or similar, wait for them to share it
 - Even if you've explained the solution, the candidate must write and share their own code before you can move on
+- Do NOT end the interview just because the conversation is long - wait for the candidate to finish coding
+- The number of messages does NOT determine when to end - only whether the candidate has completed their code
 
 INTERVIEW RULES:
 1. Ask exactly ONE question at a time. Wait for the complete answer before responding.
@@ -150,7 +153,31 @@ export async function callInterviewerLLM(
   });
 
   const reply = completion.choices[0].message.content ?? "";
-  const isComplete = reply.toLowerCase().includes("that wraps up our interview");
+  let isComplete = reply.toLowerCase().includes("that wraps up our interview");
+  
+  // Additional safeguard for coding interviews: don't allow completion unless
+  // we've seen code from the candidate in recent messages
+  if (isComplete && (state.mode === "CODING" || state.mode === "VOICE_CODING")) {
+    // Check if the last few user messages contain code indicators
+    const recentUserMessages = state.conversationHistory
+      .filter(m => m.role === "user")
+      .slice(-3); // Last 3 user messages
+    
+    const hasSharedCode = recentUserMessages.some(m => 
+      m.content.includes("```") || // Code block
+      m.content.includes("class ") || // Java/C++ class
+      m.content.includes("def ") || // Python function
+      m.content.includes("function ") || // JavaScript function
+      m.content.includes("public ") || // Java public
+      m.content.includes("private ") || // Java private
+      m.content.length > 200 // Long message likely containing code
+    );
+    
+    if (!hasSharedCode) {
+      console.warn('[callInterviewerLLM] Prevented premature completion - no code detected in recent messages');
+      isComplete = false;
+    }
+  }
 
   return { reply, isComplete };
 }
