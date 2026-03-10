@@ -8,10 +8,11 @@ import { WebSocketServer } from "ws";
 import { handleVoiceConnection } from "./lib/voice-pipeline";
 
 const dev = process.env.NODE_ENV !== "production";
-const hostname = process.env.HOSTNAME ?? (dev ? "localhost" : "0.0.0.0");
+const hostname = dev ? "localhost" : "0.0.0.0";
 const port = parseInt(process.env.PORT ?? "3000", 10);
 
-const app = next({ dev, hostname, port });
+// Don't pass hostname to Next.js in production - let it handle its own binding
+const app = next({ dev, ...(dev ? { hostname } : {}), port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
