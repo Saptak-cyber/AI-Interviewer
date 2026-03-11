@@ -81,6 +81,21 @@ function buildEvaluatorSystemPrompt(): string {
 
 Analyze the interview conversation provided and return a JSON evaluation. Be honest — do not inflate scores.
 
+CRITICAL EVALUATION RULES:
+1. First, count TOTAL questions asked vs. questions FULLY answered with working solutions
+2. Calculate completion rate: (answered questions / total questions)
+3. If completion rate < 100%, ALL scores must be capped based on completion:
+   - 50% completion (1/2 questions) → ALL scores MAX 5/10
+   - 33% completion (1/3 questions) → ALL scores MAX 4/10
+   - 0% completion → ALL scores 0-2/10
+4. Even if one solution is perfect, incomplete interviews = automatic failure in real FAANG interviews
+5. Code quality, time complexity, edge cases scores MUST reflect overall completion, not just answered questions
+
+SCORING FORMULA:
+- Base score = quality of answered questions (0-10)
+- Final score = base score × completion rate
+- Example: Perfect solution on 1/2 questions = 10 × 0.5 = 5/10 MAX
+
 Return ONLY a valid JSON object with this exact structure (no markdown, no explanation, just JSON):
 {
   "scores": {
@@ -92,16 +107,16 @@ Return ONLY a valid JSON object with this exact structure (no markdown, no expla
     "overall": <integer 0-10>
   },
   "strengths": ["strength 1", "strength 2", "strength 3"],
-  "weaknesses": ["weakness 1", "weakness 2"],
-  "summary": "2–3 sentence summary of overall performance and hiring recommendation"
+  "weaknesses": ["weakness 1", "weakness 2", "MUST include: Failed to complete X out of Y questions"],
+  "summary": "2–3 sentence summary. MUST mention incomplete interview if applicable. State: would NOT be hired if incomplete."
 }
 
-Scoring guide:
-- 9–10: Exceptional, would be hired immediately
-- 7–8: Strong, likely to pass
-- 5–6: Average, borderline
-- 3–4: Below expectations
-- 0–2: Significant gaps
+Scoring guide (AFTER applying completion rate cap):
+- 9–10: Exceptional, completed ALL questions with optimal solutions
+- 7–8: Strong, completed ALL questions with good solutions
+- 5–6: Average, completed MOST questions OR 50% completion with good quality
+- 3–4: Below expectations, <50% completion or poor solutions
+- 0–2: Significant gaps, minimal completion
 
 For behavioral interviews, use "communication", "problemSolving" (for STAR format), and "codeQuality" as "structure/clarity". Set "timeComplexity" and "edgeCases" to 0 if not applicable.`;
 }
