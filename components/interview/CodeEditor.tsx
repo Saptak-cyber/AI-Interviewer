@@ -71,7 +71,7 @@ export default function CodeEditor({ sessionId, question, onCodeChange }: CodeEd
       const res = await fetch("/api/interview/run-code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, code, question }),
+        body: JSON.stringify({ sessionId, code, question, language }),
       });
 
       const data = await res.json();

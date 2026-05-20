@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { callCodeAnalysisLLM } from "@/lib/groq";
+import { executeCode } from "@/lib/judge0";
 import type { RunCodeRequest } from "@/types";
 
 export async function POST(req: NextRequest) {
@@ -12,7 +13,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as RunCodeRequest;
-    const { code, question } = body;
+    const { code, question, language = "javascript" } = body;
 
     if (!code?.trim() || !question?.trim()) {
       return NextResponse.json(
@@ -28,7 +29,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const analysis = await callCodeAnalysisLLM(code, question);
+    // Pass the raw code to Judge0 to see if it even compiles/runs smoothly
+    const execData = await executeCode(code, language);
+
+    const analysis = await callCodeAnalysisLLM(code, question, execData);
 
     return NextResponse.json({ analysis });
   } catch (error) {

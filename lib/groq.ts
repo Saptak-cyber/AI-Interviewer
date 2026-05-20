@@ -1,4 +1,5 @@
 import Groq from "groq-sdk";
+import { traceable } from "langsmith/traceable";
 import type {
   RedisSessionState,
   EvaluationScores,
@@ -69,7 +70,8 @@ INTERVIEW RULES:
 4. If the candidate is genuinely stuck after clearly attempting, you may give a small directional hint.
 5. Do NOT reveal optimal solutions or answers during the interview.
 6. Keep the conversation focused on the interview topic.
-7. After covering ${maxQuestions} main questions with adequate follow-ups (and seeing actual code implementations from the candidate for coding questions), conclude with: "That wraps up our interview. I'll now generate your feedback. Thank you for your time!" — exactly this phrase to signal completion.
+7. When you are done with the current question and are explicitly asking the next MAIN question, you MUST prefix your entire response with exactly ">>>[NEXT_QUESTION]<<<". This helps track progress. Do NOT use this prefix for follow-ups.
+8. After covering ${maxQuestions} main questions with adequate follow-ups (and seeing actual code implementations from the candidate for coding questions), conclude with: "That wraps up our interview. I'll now generate your feedback. Thank you for your time!" — exactly this phrase to signal completion.
 
 TONE: Professional but approachable. Like a real Google/Meta/Amazon interviewer.
 
@@ -121,7 +123,23 @@ Scoring guide (AFTER applying completion rate cap):
 For behavioral interviews, use "communication", "problemSolving" (for STAR format), and "codeQuality" as "structure/clarity". Set "timeComplexity" and "edgeCases" to 0 if not applicable.`;
 }
 
-function buildCodeAnalysisPrompt(code: string, question: string): string {
+function buildCodeAnalysisPrompt(code: string, question: string, execData?: any): string {
+  const executionContext = execData ? `
+EXECUTION RESULTS:
+Status: ${execData.status || "Unknown"}
+Time: ${execData.time || 0}s
+Memory: ${execData.memory || 0}KB
+STDOUT:
+\`\`\`
+${execData.stdout || "None"}
+\`\`\`
+STDERR/COMPILE ERRORS:
+\`\`\`
+${execData.stderr || execData.compileOutput || "None"}
+\`\`\`
+If there are errors in STDERR/COMPILE ERRORS, the code does NOT work. Factor this into your bugs and 'isCorrect' evaluation.
+` : "EXECUTION RESULTS: Not available (could not run code natively).";
+
   return `You are a senior software engineer evaluating code written during a technical interview.
 
 QUESTION:
@@ -131,6 +149,7 @@ SUBMITTED CODE:
 \`\`\`
 ${code}
 \`\`\`
+${executionContext}
 
 Analyze this code and return ONLY a valid JSON object (no markdown):
 {
@@ -148,26 +167,44 @@ Analyze this code and return ONLY a valid JSON object (no markdown):
 }`;
 }
 
-export async function callInterviewerLLM(
+export const callInterviewerLLM = traceable(async function callInterviewerLLM(
   state: RedisSessionState,
-  userMessage: string
+  userMessage: string,
+  code?: string,
+  language?: string
 ): Promise<{ reply: string; isComplete: boolean }> {
   const systemPrompt = buildInterviewerSystemPrompt(state);
 
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+  // Exclude the redundant `userMessage` push here since we ALREADY pushed it to `conversationHistory` manually in the API route.
+  // However, we inject the dynamic code snippet purely for this inference call, preventing permanent context bloating.
+  const inferenceMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
     ...state.conversationHistory,
-    { role: "user", content: userMessage },
   ];
+
+  if (code && code.trim()) {
+    // Append the code as an un-recorded snapshot context
+    inferenceMessages.push({
+      role: "user",
+      content: `[Current code in editor (${language || "text"}):]\n\`\`\`${language || "text"}\n${code}\n\`\`\`\n\nPlease evaluate this code in your response if applicable.`
+    });
+  }
 
   const completion = await groq.chat.completions.create({
     model: MODEL,
-    messages,
+    messages: inferenceMessages,
     temperature: 0.7,
     max_tokens: 1024,
   });
 
-  const reply = completion.choices[0].message.content ?? "";
+  let reply = completion.choices[0].message.content ?? "";
+  
+  // Handle state tracking token from LLM
+  if (reply.includes(">>>[NEXT_QUESTION]<<<")) {
+    state.questionIndex += 1;
+    reply = reply.replace(">>>[NEXT_QUESTION]<<<", "").trim();
+  }
+
   let isComplete = reply.toLowerCase().includes("that wraps up our interview");
   
   // Additional safeguard for coding interviews: don't allow completion unless
@@ -195,14 +232,14 @@ export async function callInterviewerLLM(
   }
 
   return { reply, isComplete };
-}
+}, { name: "callInterviewerLLM", run_type: "chain" });
 
 /**
  * Streaming variant of callInterviewerLLM.
  * Yields individual text tokens as they arrive from Groq.
  * Pass an AbortSignal to cancel mid-stream (e.g. on user barge-in).
  */
-export async function* callInterviewerLLMStream(
+export const callInterviewerLLMStream = traceable(async function* callInterviewerLLMStream(
   state: RedisSessionState,
   userMessage: string,
   signal?: AbortSignal
@@ -228,9 +265,9 @@ export async function* callInterviewerLLMStream(
     const token = chunk.choices[0]?.delta?.content ?? "";
     if (token) yield token;
   }
-}
+}, { name: "callInterviewerLLMStream", run_type: "chain" });
 
-export async function callEvaluatorLLM(
+export const callEvaluatorLLM = traceable(async function callEvaluatorLLM(
   state: RedisSessionState
 ): Promise<EvaluationResult> {
   const systemPrompt = buildEvaluatorSystemPrompt();
@@ -284,13 +321,14 @@ Provide the evaluation JSON now.`;
       summary: "An evaluation was attempted but could not be fully parsed.",
     };
   }
-}
+}, { name: "callEvaluatorLLM", run_type: "chain" });
 
-export async function callCodeAnalysisLLM(
+export const callCodeAnalysisLLM = traceable(async function callCodeAnalysisLLM(
   code: string,
-  question: string
+  question: string,
+  execData: any = null
 ): Promise<object> {
-  const prompt = buildCodeAnalysisPrompt(code, question);
+  const prompt = buildCodeAnalysisPrompt(code, question, execData);
 
   const completion = await groq.chat.completions.create({
     model: MODEL,
@@ -308,7 +346,7 @@ export async function callCodeAnalysisLLM(
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
     return { error: "Could not parse code analysis" };
   }
-}
+}, { name: "callCodeAnalysisLLM", run_type: "chain" });
 
 function formatLabel(value: string): string {
   return value

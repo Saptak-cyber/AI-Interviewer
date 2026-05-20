@@ -134,4 +134,5 @@ export interface RunCodeRequest {
   sessionId: string;
   code: string;
   question: string;
+  language: string;
 }

@@ -51,17 +51,11 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Build the user message with code context if provided
-    let userMessage = message;
-    if (code && code.trim()) {
-      userMessage = `${message}\n\n[Current code in editor (${language}):]:\n\`\`\`${language}\n${code}\n\`\`\``;
-    }
+    // Append original message without bloated code history
+    state.conversationHistory.push({ role: "user", content: message });
 
-    // Append user message to conversation history
-    state.conversationHistory.push({ role: "user", content: userMessage });
-
-    // Call LLM with the enriched message
-    const { reply, isComplete } = await callInterviewerLLM(state, userMessage);
+    // Call LLM with the latest code state passed externally
+    const { reply, isComplete } = await callInterviewerLLM(state, message, code, language);
 
     // Append AI reply to history
     state.conversationHistory.push({ role: "assistant", content: reply });
