@@ -102,18 +102,20 @@ function MessageBubble({
               components={{
                 // Customize markdown elements styling
                 p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                code: ({ inline, className, children, ...props }: any) => {
-                  return inline ? (
-                    <code className="bg-zinc-700 px-1.5 py-0.5 rounded text-xs text-indigo-300" {...props}>
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                code: ({ className, children, ...props }: any) => {
+                  const isBlock = className?.includes("language-") || className?.includes("hljs") || String(children).includes("\n");
+                  return !isBlock ? (
+                    <code className="bg-zinc-700/60 px-1.5 py-0.5 rounded-md text-xs text-indigo-300 font-mono whitespace-pre-wrap" {...props}>
                       {children}
                     </code>
                   ) : (
-                    <code className={cn("block bg-zinc-900 p-3 rounded-lg overflow-x-auto text-xs", className)} {...props}>
+                    <code className={cn("text-xs font-mono", className)} {...props}>
                       {children}
                     </code>
                   );
                 },
-                pre: ({ children }) => <pre className="bg-zinc-900 rounded-lg overflow-hidden my-2">{children}</pre>,
+                pre: ({ children }) => <pre className="bg-zinc-950 border border-zinc-800 p-4 rounded-lg overflow-x-auto my-4 text-zinc-300">{children}</pre>,
                 ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
                 ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
                 li: ({ children }) => <li className="ml-2">{children}</li>,
@@ -748,18 +750,20 @@ export default function ChatInterface({
                 rehypePlugins={[rehypeHighlight]}
                 components={{
                   p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                  code: ({ inline, className, children, ...props }: any) => {
-                    return inline ? (
-                      <code className="bg-zinc-700 px-1.5 py-0.5 rounded text-xs text-indigo-300" {...props}>
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  code: ({ className, children, ...props }: any) => {
+                    const isBlock = className?.includes("language-") || className?.includes("hljs") || String(children).includes("\n");
+                    return !isBlock ? (
+                      <code className="bg-zinc-700/60 px-1.5 py-0.5 rounded-md text-xs text-indigo-300 font-mono whitespace-pre-wrap" {...props}>
                         {children}
                       </code>
                     ) : (
-                      <code className={cn("block bg-zinc-900 p-3 rounded-lg overflow-x-auto text-xs", className)} {...props}>
+                      <code className={cn("text-xs font-mono", className)} {...props}>
                         {children}
                       </code>
                     );
                   },
-                  pre: ({ children }) => <pre className="bg-zinc-900 rounded-lg overflow-hidden my-2">{children}</pre>,
+                  pre: ({ children }) => <pre className="bg-zinc-950 border border-zinc-800 p-4 rounded-lg overflow-x-auto my-4 text-zinc-300">{children}</pre>,
                   ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
                   ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
                   li: ({ children }) => <li className="ml-2">{children}</li>,
