@@ -94,9 +94,13 @@ export async function POST(req: NextRequest) {
       firstMessage,
     } satisfies StartInterviewResponse);
   } catch (error) {
-    console.error("[/api/interview/start]", error);
+    const err = error as Error;
+    console.error("[/api/interview/start] ERROR DETAILS:");
+    console.error("Message:", err instanceof Error ? err.message : String(error));
+    console.error("Stack:", err instanceof Error ? err.stack : undefined);
+    
     return NextResponse.json(
-      { error: "Failed to start interview" },
+      { error: "Failed to start interview", details: err instanceof Error ? err.message : String(error) },
       { status: 500 }
     );
   }

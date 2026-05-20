@@ -38,6 +38,8 @@ The AI Technical Interviewer is a full-stack Next.js application that conducts r
 - **Speech-to-Text**: HuggingFace Whisper Large v3 Turbo
 - **Text-to-Speech**: Kokoro-82M (HuggingFace Spaces)
 - **Auth**: Google OAuth
+- **Code Execution**: Judge0 API
+- **Observability**: LangSmith
 
 ### 2.2 System Architecture Diagram
 
@@ -101,6 +103,10 @@ The AI Technical Interviewer is a full-stack Next.js application that conducts r
 │  │  Groq    │  │HuggingFace│ │ Kokoro   │  │  Google  │       │
 │  │  API     │  │ Whisper   │ │  TTS     │  │  OAuth   │       │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │
+│  ┌──────────┐  ┌──────────┐                                   │
+│  │  Judge0  │  │ LangSmith│                                   │
+│  │  API     │  │          │                                   │
+│  └──────────┘  └──────────┘                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -184,11 +190,12 @@ The AI Technical Interviewer is a full-stack Next.js application that conducts r
   1. Authenticate and validate session ownership
   2. Load session state from Redis
   3. Append user message to conversation history
-  4. Include code context if provided (coding mode)
-  5. Call Groq LLM with full conversation history
-  6. Detect completion signal ("that wraps up our interview")
-  7. Update Redis state and PostgreSQL turns
-  8. Return AI reply and completion status
+  4. Inject code context ephemerally during LLM inference (sliding window to prevent context bloat)
+  5. Call Groq LLM with conversation history
+  6. Track state progression via `>>>[NEXT_QUESTION]<<<` tag
+  7. Detect completion signal ("that wraps up our interview")
+  8. Update Redis state, tracking `questionIndex`, and PostgreSQL turns
+  9. Return AI reply and completion status
 - **Request**: `{ sessionId, message, code?, language? }`
 - **Response**: `{ reply: string, isComplete: boolean }`
 
@@ -211,14 +218,16 @@ The AI Technical Interviewer is a full-stack Next.js application that conducts r
   - Overall (0-10)
 
 #### `/api/interview/run-code` (POST)
-- **Purpose**: Analyze submitted code during coding interviews
+- **Purpose**: Real code execution and analysis during coding interviews
 - **Flow**:
   1. Authenticate user
-  2. Validate code length (<10k chars)
-  3. Call Groq LLM with code analysis prompt
-  4. Parse JSON response with complexity, bugs, suggestions, test results
-  5. Return analysis
-- **Request**: `{ sessionId, code, question }`
+  2. Validate code constraints and map language to Judge0 ID
+  3. Send code to Judge0 CE (Compute Engine) execution environment (`lib/judge0.ts`)
+  4. Receive real `stdout`, `stderr`, runtime memory, and execution time metrics from Judge0
+  5. Call Groq LLM with execution results injected as pure context
+  6. Parse JSON response with complexity, bugs, suggestions, and real test outcomes
+  7. Return analysis
+- **Request**: `{ sessionId, code, question, language }`
 - **Response**: `{ analysis: CodeAnalysis }`
 
 #### `/api/voice/transcribe` (POST)
@@ -651,10 +660,11 @@ User sees scores, strengths, weaknesses, summary
 
 ## 11. Monitoring & Observability
 
-### 11.1 Logging
+### 11.1 Logging & Tracing
+- **LangSmith Tracing**: Integrated wrapping all LLM calls inside `lib/groq.ts` with `traceable`. Generates visual execution chains, token tracking, Latency (TTFT), inputs/outputs, and failure captures.
 - **Console Logs**: Detailed logging in voice pipeline and API routes
-- **Error Tracking**: Catch blocks log errors with context
-- **Performance**: Log TTS/STT latency
+- **Error Tracking**: Catch blocks log errors natively, returning stack details securely.
+- **Performance**: Log TTS/STT latency securely.
 
 ### 11.2 Metrics (Future)
 - **Interview Completion Rate**: % of started interviews completed
@@ -683,6 +693,9 @@ GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 NEXTAUTH_URL=https://...
 NEXTAUTH_SECRET=...
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=...
+LANGCHAIN_PROJECT=ai-interviewer
 ```
 
 ### 12.3 Build Process
