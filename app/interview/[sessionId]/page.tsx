@@ -139,7 +139,19 @@ export default function InterviewPage() {
           setLatestQuestion(latestAiQuestion.content);
         }
 
-        if (sess.isComplete) {
+        // Check if interview is complete - either from session data or from last turn
+        const lastTurn = sess.turns[sess.turns.length - 1];
+        const hasSystemMessage = lastTurn?.role === "AI" && lastTurn?.kind === "SYSTEM";
+        const lastAIMessage = lastTurn?.role === "AI" ? lastTurn.content.toLowerCase() : "";
+        const hasCompletionPhrase = lastAIMessage.includes("that wraps up our interview") || 
+                                     lastAIMessage.includes("generate your feedback");
+        
+        if (sess.isComplete || hasSystemMessage || hasCompletionPhrase) {
+          console.log('[InterviewPage] Interview is complete, setting isComplete to true', {
+            sessionComplete: sess.isComplete,
+            hasSystemMessage,
+            hasCompletionPhrase
+          });
           setIsComplete(true);
         }
       } catch (err) {
@@ -151,6 +163,43 @@ export default function InterviewPage() {
 
     loadSession();
   }, [sessionId]);
+
+  // Poll for completion status every 3 seconds if not complete
+  useEffect(() => {
+    if (isComplete) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/interview/${sessionId}`, {
+          cache: 'no-store',
+        });
+        const data = await res.json();
+        
+        if (res.ok && data.session) {
+          const sess = data.session as SessionData;
+          const lastTurn = sess.turns[sess.turns.length - 1];
+          const hasSystemMessage = lastTurn?.role === "AI" && lastTurn?.kind === "SYSTEM";
+          const lastAIMessage = lastTurn?.role === "AI" ? lastTurn.content.toLowerCase() : "";
+          const hasCompletionPhrase = lastAIMessage.includes("that wraps up our interview") || 
+                                       lastAIMessage.includes("generate your feedback");
+          
+          if (sess.isComplete || hasSystemMessage || hasCompletionPhrase) {
+            console.log('[InterviewPage] Poll detected completion, setting isComplete to true', {
+              sessionComplete: sess.isComplete,
+              hasSystemMessage,
+              hasCompletionPhrase
+            });
+            setIsComplete(true);
+            setSession(sess);
+          }
+        }
+      } catch (err) {
+        console.error('[InterviewPage] Poll error:', err);
+      }
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [sessionId, isComplete]);
 
   if (isLoading) {
     return (
@@ -206,10 +255,27 @@ export default function InterviewPage() {
           <span className="text-xs text-zinc-600">
             {formatDuration(session.durationType)}
           </span>
-          {isComplete && (
+          {isComplete ? (
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
               Complete
             </span>
+          ) : (
+            <button
+              onClick={async () => {
+                console.log('[InterviewPage] Manual completion triggered');
+                setIsComplete(true);
+                try {
+                  await fetch(`/api/interview/${sessionId}/complete`, {
+                    method: "POST",
+                  });
+                } catch (err) {
+                  console.error("Failed to mark interview as complete:", err);
+                }
+              }}
+              className="text-xs px-2 py-0.5 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+            >
+              View Feedback
+            </button>
           )}
         </div>
       </header>
@@ -231,7 +297,10 @@ export default function InterviewPage() {
                 mode={session.mode as "TEXT" | "CODING" | "VOICE_TEXT" | "VOICE_CODING"}
                 initialMessage={firstMessage}
                 initialHistory={history}
-                onComplete={() => setIsComplete(true)}
+                onComplete={() => {
+                  console.log('[InterviewPage] onComplete callback triggered');
+                  setIsComplete(true);
+                }}
                 currentCode={currentCode}
                 onNewAIMessage={(content, kind) => {
                   // Only reset editor for NEW coding problems, not follow-ups

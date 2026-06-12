@@ -683,7 +683,11 @@ export default function ChatInterface({
         onNewAIMessage?.(data.reply, aiMsg.kind);
 
         if (hasVoice) void playTts(data.reply, msgId);
-        if (data.isComplete) { setIsComplete(true); onCompleteRef.current(); }
+        if (data.isComplete) { 
+          console.log('[ChatInterface] Interview complete, calling onComplete callback');
+          setIsComplete(true); 
+          onCompleteRef.current(); 
+        }
       } catch (err) {
         setMessages((prev) => [
           ...prev,
